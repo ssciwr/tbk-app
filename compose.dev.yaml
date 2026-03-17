@@ -1,0 +1,53 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.dev.Dockerfile
+    container_name: teddy-backend-dev
+    env_file:
+      - backend/.env
+    volumes:
+      - .:/workspace
+    working_dir: /workspace/backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    network_mode: host
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.dev.Dockerfile
+    container_name: teddy-frontend-dev
+    environment:
+      - PUBLIC_BACKEND_URL=http://127.0.0.1:8000
+    volumes:
+      - .:/workspace
+      - /workspace/frontend/node_modules
+    working_dir: /workspace/frontend
+    command:
+      [
+        "sh",
+        "-c",
+        "npm install && npm run dev -- --host 0.0.0.0 --port 3000",
+      ]
+    depends_on:
+      - backend
+    network_mode: host
+
+  dummy-runner:
+    build:
+      context: .
+      dockerfile: docker/backend.dev.Dockerfile
+    container_name: teddy-dummy-runner-dev
+    env_file:
+      - backend/.env
+    environment:
+      - BACKEND_URL=http://127.0.0.1:8000
+      - RUNNER_POLL_SECONDS=2
+      - RUNNER_PROCESS_SECONDS=5
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: ["python", "runner/dummy_runner.py"]
+    depends_on:
+      - backend
+    network_mode: host

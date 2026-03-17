@@ -1,0 +1,9 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+PyJWT==2.10.1
+pydantic-settings==2.10.1
+python-multipart==0.0.20
+qrcode[pil]==8.2
+reportlab==4.4.3
+requests==2.32.5
+Pillow==11.3.0

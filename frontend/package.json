@@ -1,0 +1,29 @@
+{
+  "dependencies": {
+    "jsqr": "^1.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@sveltejs/adapter-node": "^5.3.1",
+    "@sveltejs/kit": "^2.48.2",
+    "@sveltejs/vite-plugin-svelte": "^6.2.0",
+    "@types/node": "^22.17.2",
+    "svelte": "^5.38.6",
+    "svelte-check": "^4.3.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  },
+  "name": "teddy-hospital-frontend",
+  "private": true,
+  "scripts": {
+    "build": "vite build",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "dev": "vite dev",
+    "dev:docker": "vite dev --host 0.0.0.0 --port 3000",
+    "prepare": "svelte-kit sync",
+    "preview": "vite preview",
+    "test:e2e": "svelte-kit sync && playwright test"
+  },
+  "type": "module",
+  "version": "1.0.0"
+}

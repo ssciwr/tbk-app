@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+from io import BytesIO
+
+from app.storage.providers.seafile import SeafileProvider
+
+
+def test_seafile_provider_is_mockable(monkeypatch) -> None:
+    monkeypatch.setattr(SeafileProvider, "_get_server_version", lambda self: "12.0")
+    monkeypatch.setattr(SeafileProvider, "_ensure_library", lambda self: "repo-1")
+    monkeypatch.setattr(SeafileProvider, "_discover_next_case_id", lambda self: 1)
+
+    upload_calls: list[tuple[str, str]] = []
+    link_calls: list[str] = []
+    created_dirs: list[str] = []
+
+    monkeypatch.setattr(
+        SeafileProvider, "_create_dir", lambda self, path: created_dirs.append(path)
+    )
+    monkeypatch.setattr(
+        SeafileProvider,
+        "_create_shared_link",
+        lambda self, path: f"https://seafile.local/s/{path.strip('/')}",
+    )
+    monkeypatch.setattr(
+        SeafileProvider,
+        "_upload_to_repo",
+        lambda self, parent_dir, file_obj, filename: upload_calls.append(
+            (parent_dir, filename)
+        ),
+    )
+    monkeypatch.setattr(
+        SeafileProvider,
+        "_upload_via_share_link",
+        lambda self, share_link, file_type, file_obj, filename: link_calls.append(
+            f"{share_link}:{file_type}:{filename}"
+        ),
+    )
+
+    provider = SeafileProvider(
+        server_url="https://seafile.local",
+        library_name="Teddy",
+        account_token="token",
+    )
+
+    ref = provider.create_storage_for_user()
+    assert ref.startswith("https://seafile.local/s/")
+    assert (
+        "/1" in created_dirs
+        and "/1/normal" in created_dirs
+        and "/1/xray" in created_dirs
+    )
+
+    provider.upload_file(1, "normal", BytesIO(b"a"), "original.png")
+    assert upload_calls == [("/1/normal", "original.png")]
+
+    provider.upload_file(
+        "https://seafile.local/s/abcd/", "xray", BytesIO(b"b"), "xray.png"
+    )
+    assert link_calls == ["https://seafile.local/s/abcd/:xray:xray.png"]
+
+
+def test_seafile_provider_repo_token_mode(monkeypatch) -> None:
+    monkeypatch.setattr(SeafileProvider, "_get_server_version", lambda self: "12.0")
+    monkeypatch.setattr(SeafileProvider, "_discover_next_case_id", lambda self: 5)
+
+    def fake_request_json(self, method, path, **kwargs):
+        if path == "/api/v2.1/via-repo-token/repo-info/":
+            return {"repo_id": "repo-xyz"}
+        return {}
+
+    monkeypatch.setattr(SeafileProvider, "_request_json", fake_request_json)
+
+    provider = SeafileProvider(
+        server_url="https://seafile.local",
+        library_name="Teddy",
+        repo_token="repo-token",
+    )
+
+    assert provider.repo_id == "repo-xyz"

@@ -1,0 +1,39 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.prod.Dockerfile
+    container_name: teddy-backend
+    env_file:
+      - backend/.env
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.prod.Dockerfile
+    container_name: teddy-frontend
+    environment:
+      - PORT=3000
+      - PUBLIC_BACKEND_URL=
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: teddy-nginx
+    env_file:
+      - .env
+    volumes:
+      - ./nginx/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${CERTIFICATE_FILE}:/etc/ssl/certs/teddy.crt:ro
+      - ${CERTIFICATE_KEY_FILE}:/etc/ssl/private/teddy.key:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - frontend
