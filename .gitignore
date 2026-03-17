@@ -1,0 +1,59 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local env files
+.env
+backend/.env
+frontend/.env
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
+
+# Backend artifacts
+backend/.venv/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/data/
+
+# Frontend artifacts
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/.vite/
+frontend/dist/
+frontend/build/
+frontend/playwright-report/
+frontend/test-results/
+frontend/.npm/
+
+# Project runtime data
+data/
+tmp/
+*.log
+
+# Legacy reference implementation artifacts
+old/.git/
+old/.pytest_cache/
+old/temp/
+old/qr.pdf
+old/frontend/node_modules/
+old/frontend/.svelte-kit/
+old/frontend/test-results/
+
