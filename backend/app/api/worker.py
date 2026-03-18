@@ -53,7 +53,7 @@ async def worker_submit_result(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        received, expected, ready_for_review = services.queue.submit_result(
+        received, expected, ready_for_review, ignored = services.queue.submit_result(
             case_id, png_bytes
         )
     except KeyError as exc:
@@ -62,7 +62,7 @@ async def worker_submit_result(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {
-        "status": "accepted",
+        "status": "ignored" if ignored else "accepted",
         "received_results": received,
         "expected_results": expected,
         "ready_for_review": ready_for_review,

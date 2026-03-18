@@ -27,6 +27,13 @@ class CaseQueue:
         with self._lock:
             return len(self._dispatch_queue)
 
+    def _drop_from_dispatch_queue(self, case_id: int) -> None:
+        self._dispatch_queue = deque(
+            queued_case_id
+            for queued_case_id in self._dispatch_queue
+            if queued_case_id != case_id
+        )
+
     def enqueue_case(
         self,
         *,
@@ -95,16 +102,27 @@ class CaseQueue:
 
             return None
 
-    def submit_result(self, case_id: int, result_bytes: bytes) -> tuple[int, int, bool]:
+    def submit_result(
+        self, case_id: int, result_bytes: bytes
+    ) -> tuple[int, int, bool, bool]:
         with self._lock:
             case = self._cases.get(case_id)
             if case is None:
                 raise KeyError("Case not found")
 
-            if case.state in {CaseState.CONFIRMED, CaseState.CANCELED}:
-                raise ValueError("Case is closed")
+            # Workers can still submit late results after a user resolved a case.
+            # Treat these as no-op acknowledgements instead of hard failures.
+            if case.state in {
+                CaseState.PENDING_FRACTURE,
+                CaseState.CONFIRMED,
+                CaseState.CANCELED,
+            }:
+                return len(case.results), case.expected_results, False, True
             if case.original_bytes is None:
                 raise ValueError("Case has no acquired image")
+
+            if len(case.results) >= case.expected_results:
+                return len(case.results), case.expected_results, True, True
 
             if len(case.results) < case.expected_results:
                 case.results.append(result_bytes)
@@ -113,11 +131,9 @@ class CaseQueue:
             if ready_for_review:
                 case.state = CaseState.AWAITING_REVIEW
                 self._awaiting_review.add(case_id)
-                self._dispatch_queue = deque(
-                    item for item in self._dispatch_queue if item != case_id
-                )
+                self._drop_from_dispatch_queue(case_id)
 
-            return len(case.results), case.expected_results, ready_for_review
+            return len(case.results), case.expected_results, ready_for_review, False
 
     def pending_review(self) -> list[CaseRecord]:
         with self._lock:
@@ -173,7 +189,12 @@ class CaseQueue:
             case = self._cases.get(case_id)
             if case is None:
                 raise KeyError("Case not found")
-            if case.state != CaseState.AWAITING_REVIEW:
+            if case.state not in {
+                CaseState.QUEUED,
+                CaseState.COLLECTING_RESULTS,
+                CaseState.RETRIED,
+                CaseState.AWAITING_REVIEW,
+            }:
                 raise ValueError("Case is not ready for confirmation")
             if choice_index < 0 or choice_index >= len(case.results):
                 raise IndexError("Invalid choice index")
@@ -181,6 +202,7 @@ class CaseQueue:
             case.selected_result_bytes = case.results[choice_index]
             case.state = CaseState.PENDING_FRACTURE
             self._awaiting_review.discard(case_id)
+            self._drop_from_dispatch_queue(case_id)
 
     def get_selected_result(self, case_id: int) -> bytes:
         with self._lock:
@@ -263,9 +285,7 @@ class CaseQueue:
             case.selected_result_bytes = None
             case.state = CaseState.CANCELED
             self._awaiting_review.discard(case_id)
-            self._dispatch_queue = deque(
-                item for item in self._dispatch_queue if item != case_id
-            )
+            self._drop_from_dispatch_queue(case_id)
 
     def discard_unimaged_case(self, case_id: int) -> None:
         with self._lock:
