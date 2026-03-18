@@ -64,6 +64,8 @@ async def review_original(
         image = services.queue.get_review_original(case_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     response = Response(content=image, media_type="image/png")
     apply_no_cache_headers(response)

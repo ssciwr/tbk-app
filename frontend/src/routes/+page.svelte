@@ -3,6 +3,6 @@
   import { goto } from '$app/navigation';
 
   onMount(async () => {
-    await goto('/camera');
+    await goto('/patient-data');
   });
 </script>

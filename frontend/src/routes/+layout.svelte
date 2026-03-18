@@ -5,10 +5,11 @@
   import { goto } from '$app/navigation';
 
   const pipelineStages = [
-    { href: '/camera', label: 'Acquire image', stage: 1 },
-    { href: '/results', label: 'Review X-Ray', stage: 2 },
-    { href: '/fracture', label: 'Apply fractures', stage: 3 },
-    { href: '/carousel', label: 'View Results', stage: 4 }
+    { href: '/patient-data', label: 'Patient data', stage: 1 },
+    { href: '/camera', label: 'Acquire image', stage: 2 },
+    { href: '/results', label: 'Review X-Ray', stage: 3 },
+    { href: '/fracture', label: 'Apply fractures', stage: 4 },
+    { href: '/carousel', label: 'View Results', stage: 5 }
   ];
 
   function logout(): void {

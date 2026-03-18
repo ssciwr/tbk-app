@@ -16,7 +16,6 @@ async def _create_case_ready_for_review(
     created = await client.post(
         "/api/cases",
         headers=auth_headers,
-        files={"file": ("case.png", io.BytesIO(png_bytes), "image/png")},
         data={
             "child_name": "Max",
             "animal_name": "Bunny",
@@ -25,7 +24,14 @@ async def _create_case_ready_for_review(
         },
     )
     assert created.status_code == 200
-    case_id = created.json()["case_id"]
+    case_id = int(created.json()["case_id"])
+
+    uploaded = await client.post(
+        f"/api/cases/{case_id}/image",
+        headers=auth_headers,
+        files={"file": ("case.png", io.BytesIO(png_bytes), "image/png")},
+    )
+    assert uploaded.status_code == 200
 
     # Move into collecting state.
     assert (
@@ -40,7 +46,7 @@ async def _create_case_ready_for_review(
         )
         assert submitted.status_code == 200
 
-    return int(case_id)
+    return case_id
 
 
 @pytest.mark.anyio

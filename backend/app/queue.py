@@ -30,7 +30,6 @@ class CaseQueue:
     def enqueue_case(
         self,
         *,
-        original_bytes: bytes,
         owner_ref: str,
         metadata: CaseMetadata,
         broken_bone: bool,
@@ -44,10 +43,25 @@ class CaseQueue:
                 owner_ref=owner_ref,
                 metadata=metadata,
                 broken_bone=broken_bone,
-                original_bytes=original_bytes,
                 expected_results=self.results_per_image,
+                state=CaseState.METADATA_ENTERED,
             )
             self._cases[case_id] = case
+            return case
+
+    def attach_case_image(self, case_id: int, original_bytes: bytes) -> CaseRecord:
+        with self._lock:
+            case = self._cases.get(case_id)
+            if case is None:
+                raise KeyError("Case not found")
+            if case.state != CaseState.METADATA_ENTERED:
+                raise ValueError("Case is not waiting for image acquisition")
+
+            case.original_bytes = original_bytes
+            case.state = CaseState.QUEUED
+            case.dispatches = 0
+            case.results.clear()
+            case.selected_result_bytes = None
             self._dispatch_queue.append(case_id)
             return case
 
@@ -68,6 +82,8 @@ class CaseQueue:
                     CaseState.RETRIED,
                 }:
                     continue
+                if case.original_bytes is None:
+                    continue
 
                 case.state = CaseState.COLLECTING_RESULTS
                 case.dispatches += 1
@@ -87,6 +103,8 @@ class CaseQueue:
 
             if case.state in {CaseState.CONFIRMED, CaseState.CANCELED}:
                 raise ValueError("Case is closed")
+            if case.original_bytes is None:
+                raise ValueError("Case has no acquired image")
 
             if len(case.results) < case.expected_results:
                 case.results.append(result_bytes)
@@ -114,6 +132,15 @@ class CaseQueue:
             ]
             return sorted(cases, key=lambda case: case.case_id, reverse=True)
 
+    def pending_image_acquisition(self) -> list[CaseRecord]:
+        with self._lock:
+            cases = [
+                case
+                for case in self._cases.values()
+                if case.state == CaseState.METADATA_ENTERED
+            ]
+            return sorted(cases, key=lambda case: case.case_id, reverse=True)
+
     def pending_fracture(self) -> list[CaseRecord]:
         with self._lock:
             cases = [
@@ -128,6 +155,8 @@ class CaseQueue:
             case = self._cases.get(case_id)
             if case is None:
                 raise KeyError("Case not found")
+            if case.original_bytes is None:
+                raise ValueError("Case has no acquired image")
             return case.original_bytes
 
     def get_review_result(self, case_id: int, index: int) -> bytes:
@@ -178,6 +207,8 @@ class CaseQueue:
                 raise KeyError("Case not found")
             if case.state != CaseState.PENDING_FRACTURE:
                 raise ValueError("Case is not pending fracture")
+            if case.original_bytes is None:
+                raise ValueError("Case has no acquired image")
 
             storage.upload_file(
                 case.owner_ref,
@@ -235,6 +266,15 @@ class CaseQueue:
             self._dispatch_queue = deque(
                 item for item in self._dispatch_queue if item != case_id
             )
+
+    def discard_unimaged_case(self, case_id: int) -> None:
+        with self._lock:
+            case = self._cases.get(case_id)
+            if case is None:
+                raise KeyError("Case not found")
+            if case.state != CaseState.METADATA_ENTERED:
+                raise ValueError("Case already has an acquired image")
+            case.state = CaseState.CANCELED
 
     def carousel_items(self) -> list[CarouselItem]:
         with self._lock:

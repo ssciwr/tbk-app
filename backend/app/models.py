@@ -6,6 +6,7 @@ from enum import Enum
 
 
 class CaseState(str, Enum):
+    METADATA_ENTERED = "metadata_entered"
     QUEUED = "queued"
     COLLECTING_RESULTS = "collecting_results"
     AWAITING_REVIEW = "awaiting_review"
@@ -27,11 +28,11 @@ class CaseRecord:
     owner_ref: str
     metadata: CaseMetadata
     broken_bone: bool
-    original_bytes: bytes
     expected_results: int
+    original_bytes: bytes | None = None
     results: list[bytes] = field(default_factory=list)
     selected_result_bytes: bytes | None = None
-    state: CaseState = CaseState.QUEUED
+    state: CaseState = CaseState.METADATA_ENTERED
     dispatches: int = 0
     approved_at: datetime | None = None
 

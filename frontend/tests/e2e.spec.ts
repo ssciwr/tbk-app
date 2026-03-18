@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMBAAImfukAAAAASUVORK5CYII=';
 
-test('login flow stores token and redirects to camera', async ({ page }) => {
+test('login flow stores token and redirects to patient data stage', async ({ page }) => {
   await page.route('**/api/auth/token', async (route) => {
     await route.fulfill({
       status: 200,
@@ -20,8 +20,8 @@ test('login flow stores token and redirects to camera', async ({ page }) => {
   await page.getByLabel('Password').fill('secret');
   await page.getByRole('button', { name: 'Login' }).click();
 
-  await expect(page).toHaveURL(/\/camera$/);
-  await expect(page.getByText('Case Details')).toBeVisible();
+  await expect(page).toHaveURL(/\/patient-data$/);
+  await expect(page.getByText('Patient Data & QR Scan')).toBeVisible();
 });
 
 test('results page supports confirm decision', async ({ page }) => {

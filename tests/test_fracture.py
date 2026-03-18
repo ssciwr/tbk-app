@@ -13,7 +13,6 @@ async def _create_case_pending_fracture(
     created = await client.post(
         "/api/cases",
         headers=auth_headers,
-        files={"file": ("case.png", io.BytesIO(image_bytes), "image/png")},
         data={
             "child_name": "Mia",
             "animal_name": "Fox",
@@ -23,6 +22,13 @@ async def _create_case_pending_fracture(
     )
     assert created.status_code == 200
     case_id = int(created.json()["case_id"])
+
+    uploaded = await client.post(
+        f"/api/cases/{case_id}/image",
+        headers=auth_headers,
+        files={"file": ("case.png", io.BytesIO(image_bytes), "image/png")},
+    )
+    assert uploaded.status_code == 200
 
     assert (
         await client.get("/api/worker/jobs/next", headers=auth_headers)

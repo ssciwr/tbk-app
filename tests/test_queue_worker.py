@@ -9,10 +9,9 @@ from httpx import AsyncClient
 async def _upload_case(
     client: AsyncClient, auth_headers: dict[str, str], image_bytes: bytes
 ) -> int:
-    response = await client.post(
+    created = await client.post(
         "/api/cases",
         headers=auth_headers,
-        files={"file": ("case.png", io.BytesIO(image_bytes), "image/png")},
         data={
             "child_name": "Ada",
             "animal_name": "Teddy",
@@ -20,10 +19,56 @@ async def _upload_case(
             "broken_bone": "false",
         },
     )
+    assert created.status_code == 200
+    created_payload = created.json()
+    assert created_payload["status"] == "metadata_entered"
+    case_id = int(created_payload["case_id"])
+
+    response = await client.post(
+        f"/api/cases/{case_id}/image",
+        headers=auth_headers,
+        files={"file": ("case.png", io.BytesIO(image_bytes), "image/png")},
+    )
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "queued"
-    return int(payload["case_id"])
+    return case_id
+
+
+@pytest.mark.anyio
+async def test_case_metadata_pending_image_and_discard(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    created = await client.post(
+        "/api/cases",
+        headers=auth_headers,
+        data={
+            "child_name": "Ada",
+            "animal_name": "Teddy",
+            "qr_content": "1",
+        },
+    )
+    assert created.status_code == 200
+    case_id = int(created.json()["case_id"])
+
+    pending = await client.get("/api/cases/pending-image", headers=auth_headers)
+    assert pending.status_code == 200
+    pending_cases = pending.json()["cases"]
+    assert len(pending_cases) == 1
+    assert pending_cases[0]["case_id"] == case_id
+    assert pending_cases[0]["status"] == "metadata_entered"
+
+    discarded = await client.delete(
+        f"/api/cases/{case_id}/pending-image",
+        headers=auth_headers,
+    )
+    assert discarded.status_code == 200
+    assert discarded.json() == {"status": "discarded"}
+
+    pending_after = await client.get("/api/cases/pending-image", headers=auth_headers)
+    assert pending_after.status_code == 200
+    assert pending_after.json()["cases"] == []
 
 
 @pytest.mark.anyio

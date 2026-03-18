@@ -1,13 +1,27 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import jsQR from 'jsqr';
   import { authedFetch } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
 
-  let childName = '';
-  let animalName = '';
-  let qrContent = '';
+  type PendingImageCase = {
+    case_id: number;
+    status: 'metadata_entered';
+    metadata: {
+      child_name: string;
+      animal_name: string;
+      broken_bone: boolean;
+      qr_content: string;
+    };
+  };
+
+  let cases: PendingImageCase[] = [];
+  let selectedCaseId: number | null = null;
+  let selectedCase: PendingImageCase | null = null;
+
+  let loadingCases = true;
+  let loadError = '';
+  let actionMessage = '';
 
   let captureMessage = '';
   let uploadMessage = '';
@@ -15,13 +29,12 @@
 
   let videoEl: HTMLVideoElement | null = null;
   let stream: MediaStream | null = null;
-  let scanHandle: ReturnType<typeof setInterval> | null = null;
-  let scanCanvas: HTMLCanvasElement | null = null;
-  let scanStatus = 'Point the camera at a QR code.';
-  let scanInFlight = false;
+  let pollHandle: ReturnType<typeof setInterval> | null = null;
 
   let capturedFile: File | null = null;
   let previewUrl = '';
+
+  $: selectedCase = cases.find((pending) => pending.case_id === selectedCaseId) ?? null;
 
   async function startCamera(): Promise<void> {
     cameraError = '';
@@ -41,7 +54,6 @@
         audio: false
       });
 
-      // Try to enforce a square stream where supported.
       const track = stream.getVideoTracks()[0];
       if (track) {
         try {
@@ -59,17 +71,12 @@
         videoEl.srcObject = stream;
         await videoEl.play();
       }
-      startQrScanner();
     } catch {
       cameraError = 'Could not access webcam; use file upload instead.';
     }
   }
 
   function stopCamera(): void {
-    if (scanHandle) {
-      clearInterval(scanHandle);
-      scanHandle = null;
-    }
     if (stream) {
       for (const track of stream.getTracks()) {
         track.stop();
@@ -78,76 +85,56 @@
     }
   }
 
-  function startQrScanner(): void {
-    if (!videoEl) {
+  async function loadPendingCases(): Promise<void> {
+    const response = await authedFetch('/api/cases/pending-image');
+    if (!response.ok) {
+      loadError = 'Failed to load cases waiting for image acquisition.';
+      loadingCases = false;
       return;
     }
 
-    const BarcodeDetectorCtor = (window as any).BarcodeDetector;
-    const detector = BarcodeDetectorCtor
-      ? new BarcodeDetectorCtor({ formats: ['qr_code'] })
-      : null;
-    scanCanvas = document.createElement('canvas');
+    const data = (await response.json()) as { cases: PendingImageCase[] };
+    cases = data.cases;
+    loadError = '';
+    loadingCases = false;
 
-    scanHandle = setInterval(async () => {
-      if (scanInFlight) {
-        return;
-      }
-      scanInFlight = true;
-      try {
-        const detectedValue = await scanQrFromLiveCamera(detector);
-        if (detectedValue) {
-          qrContent = detectedValue;
-          scanStatus = 'QR code detected.';
-        }
-      } finally {
-        scanInFlight = false;
-      }
-    }, 700);
+    if (cases.length === 0) {
+      selectedCaseId = null;
+      return;
+    }
+
+    if (!selectedCaseId || !cases.some((item) => item.case_id === selectedCaseId)) {
+      selectedCaseId = cases[0].case_id;
+    }
   }
 
-  async function scanQrFromLiveCamera(detector?: any): Promise<string | null> {
-    if (!videoEl || !scanCanvas || videoEl.readyState < 2) {
-      return null;
-    }
+  function selectCase(caseId: number): void {
+    selectedCaseId = caseId;
+    actionMessage = '';
+    uploadMessage = '';
+  }
 
-    scanCanvas.width = videoEl.videoWidth;
-    scanCanvas.height = videoEl.videoHeight;
-    const context = scanCanvas.getContext('2d');
-    if (!context) {
-      return null;
-    }
-    context.drawImage(videoEl, 0, 0);
+  async function discardCase(caseId: number): Promise<void> {
+    actionMessage = '';
+    uploadMessage = '';
 
-    if (detector) {
-      try {
-        const detections = await detector.detect(scanCanvas);
-        if (detections.length > 0 && detections[0].rawValue) {
-          return detections[0].rawValue;
-        }
-      } catch {
-        // Fallback to jsQR below.
-      }
-    }
-
-    const imageData = context.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: 'attemptBoth'
+    const response = await authedFetch(`/api/cases/${caseId}/pending-image`, {
+      method: 'DELETE'
     });
-    return code?.data ?? null;
-  }
 
-  async function scanNowFromCamera(): Promise<void> {
-    const detectedValue = await scanQrFromLiveCamera((window as any).BarcodeDetector
-      ? new (window as any).BarcodeDetector({ formats: ['qr_code'] })
-      : null);
-
-    if (detectedValue) {
-      qrContent = detectedValue;
-      scanStatus = 'QR code detected.';
+    if (!response.ok) {
+      actionMessage = `Failed to discard case ${caseId}.`;
       return;
     }
-    scanStatus = 'No QR code detected. Keep it in frame and try again.';
+
+    if (selectedCaseId === caseId) {
+      capturedFile = null;
+      captureMessage = '';
+      revokePreview();
+    }
+
+    actionMessage = `Case ${caseId} discarded.`;
+    await loadPendingCases();
   }
 
   function revokePreview(): void {
@@ -183,7 +170,6 @@
       return;
     }
 
-    // Always produce a square image by center-cropping the camera frame.
     const side = Math.min(sourceWidth, sourceHeight);
     const sx = Math.floor((sourceWidth - side) / 2);
     const sy = Math.floor((sourceHeight - side) / 2);
@@ -221,9 +207,14 @@
     }
   }
 
-  async function submitCase(event: SubmitEvent): Promise<void> {
+  async function submitImage(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     uploadMessage = '';
+
+    if (!selectedCaseId) {
+      uploadMessage = 'Select a case first.';
+      return;
+    }
 
     if (!capturedFile) {
       uploadMessage = 'Capture or upload an image first.';
@@ -232,21 +223,17 @@
 
     const form = new FormData();
     form.append('file', capturedFile);
-    form.append('child_name', childName);
-    form.append('animal_name', animalName);
-    form.append('qr_content', qrContent);
 
-    const response = await authedFetch('/api/cases', {
+    const response = await authedFetch(`/api/cases/${selectedCaseId}/image`, {
       method: 'POST',
       body: form
     });
 
     if (!response.ok) {
-      uploadMessage = 'Failed to upload case.';
+      uploadMessage = `Failed to upload image for case ${selectedCaseId}.`;
       return;
     }
 
-    await response.json();
     await goto('/results');
   }
 
@@ -255,10 +242,15 @@
     if (!token) {
       return;
     }
-    await startCamera();
+    await Promise.all([startCamera(), loadPendingCases()]);
+    pollHandle = setInterval(loadPendingCases, 2000);
   });
 
   onDestroy(() => {
+    if (pollHandle) {
+      clearInterval(pollHandle);
+      pollHandle = null;
+    }
     stopCamera();
     revokePreview();
   });
@@ -266,62 +258,125 @@
 
 <div class="grid cols-2">
   <section class="card">
-    <h1>Camera & QR Scan</h1>
+    <h1>Acquire Image</h1>
+    <p>Select a case that is waiting for image acquisition.</p>
+
+    {#if actionMessage}
+      <p>{actionMessage}</p>
+    {/if}
+    {#if loadError}
+      <p style="color:#b23a48;">{loadError}</p>
+    {/if}
+
+    {#if loadingCases}
+      <p>Loading pending cases...</p>
+    {:else if cases.length === 0}
+      <p>No cases waiting for image acquisition.</p>
+    {:else}
+      <div class="pending-case-list">
+        {#each cases as pending}
+          <article class="pending-case-card" class:selected={pending.case_id === selectedCaseId}>
+            <h2>Case #{pending.case_id}</h2>
+            <p><strong>Child:</strong> {pending.metadata.child_name}</p>
+            <p><strong>Animal:</strong> {pending.metadata.animal_name}</p>
+            <p><strong>QR:</strong> {pending.metadata.qr_content}</p>
+            <div class="case-actions">
+              <button
+                type="button"
+                class="secondary"
+                on:click={() => selectCase(pending.case_id)}
+                disabled={pending.case_id === selectedCaseId}
+              >
+                {pending.case_id === selectedCaseId ? 'Selected' : 'Select'}
+              </button>
+              <button type="button" class="warn" on:click={() => discardCase(pending.case_id)}>
+                Discard this case
+              </button>
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
+
+  <section class="card">
+    <h2>Camera Feed</h2>
+    {#if selectedCase}
+      <p>
+        Capturing for <strong>Case #{selectedCase.case_id}</strong>
+        ({selectedCase.metadata.child_name} / {selectedCase.metadata.animal_name})
+      </p>
+    {:else}
+      <p>Select a pending case to upload an image.</p>
+    {/if}
+
     {#if previewUrl}
       <img class="preview captured-frame" src={previewUrl} alt="Captured teddy" />
     {:else}
       <video bind:this={videoEl} autoplay playsinline muted class="preview"></video>
     {/if}
+
     <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
       <button type="button" on:click={previewUrl ? discardCaptured : captureFromWebcam}>
         {previewUrl ? 'Discard image' : 'Capture'}
       </button>
-      {#if !previewUrl}
-        <button type="button" class="secondary" on:click={scanNowFromCamera}>Scan QR Now</button>
-      {/if}
       <label class="secondary" style="display:inline-block; margin:0; padding:0.45rem 0.7rem; border-radius:8px; border:1px solid var(--border); cursor:pointer;">
         Upload File
         <input type="file" accept="image/*" on:change={onFileChange} style="display:none;" />
       </label>
     </div>
+
+    <form on:submit={submitImage} style="margin-top:0.8rem;">
+      <button type="submit" disabled={!selectedCase || !capturedFile}>Upload image for selected case</button>
+    </form>
+
     {#if captureMessage}
       <p>{captureMessage}</p>
     {/if}
-    {#if cameraError}
-      <p style="color:#b23a48;">{cameraError}</p>
-    {/if}
-    <p>{scanStatus}</p>
-  </section>
-
-  <section class="card">
-    <h2>Case Details</h2>
-    <form on:submit={submitCase}>
-      <label>
-        Child name
-        <input bind:value={childName} required />
-      </label>
-
-      <label>
-        Animal name
-        <input bind:value={animalName} required />
-      </label>
-
-      <label>
-        QR content
-        <input bind:value={qrContent} required placeholder="Auto-filled when QR is detected" />
-      </label>
-
-      <button type="submit">Upload Case</button>
-    </form>
-
     {#if uploadMessage}
       <p>{uploadMessage}</p>
+    {/if}
+    {#if cameraError}
+      <p style="color:#b23a48;">{cameraError}</p>
     {/if}
   </section>
 </div>
 
 <style>
-  video.preview {
+  .pending-case-list {
+    display: grid;
+    gap: 0.8rem;
+  }
+
+  .pending-case-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.7rem;
+    background: #fff;
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .pending-case-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(14, 124, 123, 0.18);
+    background: #f4fbfb;
+  }
+
+  .pending-case-card h2,
+  .pending-case-card p {
+    margin: 0;
+  }
+
+  .case-actions {
+    margin-top: 0.35rem;
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  video.preview,
+  img.captured-frame {
     display: block;
     width: 100%;
     max-width: 100%;
@@ -331,13 +386,5 @@
     border: 1px solid var(--border);
     background: #121212;
     overflow: hidden;
-  }
-
-  img.captured-frame {
-    display: block;
-    width: 100%;
-    max-width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
   }
 </style>

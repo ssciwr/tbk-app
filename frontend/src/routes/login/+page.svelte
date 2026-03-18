@@ -30,7 +30,7 @@
 
     const data = await response.json();
     setToken(data.access_token);
-    goto('/camera');
+    goto('/patient-data');
   }
 </script>
 
