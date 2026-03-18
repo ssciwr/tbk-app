@@ -10,6 +10,9 @@ from app.storage.providers.local import LocalFilesystemProvider
 
 def test_local_storage_provider_writes_and_path_safety(tmp_path: Path) -> None:
     provider = LocalFilesystemProvider(tmp_path)
+    label = provider.qr_pdf_backend_label()
+    assert label.startswith("local (")
+    assert "root=" in label
 
     user_ref = provider.create_storage_for_user()
     provider.upload_file(user_ref, "normal", BytesIO(b"original"), "orig.png")

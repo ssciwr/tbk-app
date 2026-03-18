@@ -71,6 +71,9 @@ class SeafileProvider(StorageProvider):
 
         self._next_id = self._discover_next_case_id()
 
+    def qr_pdf_backend_label(self) -> str:
+        return f"seafile (url={self.server_url}, library={self.library_name})"
+
     def _auth_header(self, token: str) -> dict[str, str]:
         if self._major_version < 11:
             return {"Authorization": f"Token {token}"}

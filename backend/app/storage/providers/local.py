@@ -30,6 +30,9 @@ class LocalFilesystemProvider(StorageProvider):
         (case_dir / "xray").mkdir(exist_ok=True)
         return case_dir
 
+    def qr_pdf_backend_label(self) -> str:
+        return f"local (root={self.root_dir})"
+
     def create_storage_for_user(self) -> str:
         with self._lock:
             case_id = self._next_id

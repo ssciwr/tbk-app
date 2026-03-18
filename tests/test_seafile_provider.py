@@ -40,8 +40,16 @@ def test_seafile_provider_is_mockable(monkeypatch) -> None:
     provider = SeafileProvider(
         server_url="https://seafile.local",
         library_name="Teddy",
-        account_token="token",
+        account_token="super-secret-account-token",
     )
+    label = provider.qr_pdf_backend_label()
+    assert "seafile (" in label
+    assert "url=https://seafile.local" in label
+    assert "library=Teddy" in label
+    assert "auth=" not in label
+    assert "repo_id=" not in label
+    assert "version=" not in label
+    assert "super-secret-account-token" not in label
 
     ref = provider.create_storage_for_user()
     assert ref.startswith("https://seafile.local/s/")
@@ -78,3 +86,10 @@ def test_seafile_provider_repo_token_mode(monkeypatch) -> None:
     )
 
     assert provider.repo_id == "repo-xyz"
+    label = provider.qr_pdf_backend_label()
+    assert "seafile (" in label
+    assert "url=https://seafile.local" in label
+    assert "library=Teddy" in label
+    assert "auth=" not in label
+    assert "repo_id=" not in label
+    assert "repo-token" not in label

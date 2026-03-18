@@ -6,6 +6,10 @@ from typing import BinaryIO, Literal
 
 class StorageProvider(ABC):
     @abstractmethod
+    def qr_pdf_backend_label(self) -> str:
+        """Return non-secret storage backend details for QR PDF headers."""
+
+    @abstractmethod
     def create_storage_for_user(self) -> str:
         """Create per-case storage and return a user-facing reference."""
 

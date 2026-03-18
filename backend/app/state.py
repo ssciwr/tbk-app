@@ -24,7 +24,7 @@ def build_services(settings: Settings) -> Services:
         results_per_image=settings.RESULTS_PER_IMAGE,
         carousel_size=settings.CAROUSEL_SIZE,
     )
-    qr_jobs = QRJobManager(storage, storage_backend=settings.STORAGE_PROVIDER)
+    qr_jobs = QRJobManager(storage)
     return Services(settings=settings, storage=storage, queue=queue, qr_jobs=qr_jobs)
 
 

@@ -24,11 +24,9 @@ class QRJob:
 
 
 class QRJobManager:
-    def __init__(
-        self, storage: StorageProvider, storage_backend: str = "unknown"
-    ) -> None:
+    def __init__(self, storage: StorageProvider) -> None:
         self.storage = storage
-        self.storage_backend = storage_backend
+        self.storage_backend_label = storage.qr_pdf_backend_label()
         self._jobs: dict[str, QRJob] = {}
         self._lock = Lock()
 
@@ -133,6 +131,8 @@ class QRJobManager:
         pdf.setFont("Helvetica-Bold", 11)
         pdf.drawString(margin_x, top_y, "Teddy Hospital QR Batch")
         pdf.setFont("Helvetica", 9)
-        pdf.drawString(margin_x, top_y - 14, f"Storage backend: {self.storage_backend}")
+        pdf.drawString(
+            margin_x, top_y - 14, f"Storage backend: {self.storage_backend_label}"
+        )
         pdf.drawString(margin_x, top_y - 27, f"Generated: {generated_at}")
         pdf.line(margin_x, top_y - 34, page_width - margin_x, top_y - 34)
