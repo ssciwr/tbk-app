@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { authedFetch } from '$lib/api';
+  import { rememberProfiledCamera, startProfiledCamera } from '$lib/camera';
   import { requireAuthRedirect } from '$lib/auth';
 
   type PendingImageCase = {
@@ -44,33 +45,7 @@
     }
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          aspectRatio: { ideal: 1 },
-          width: { ideal: 1080 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
-
-      const track = stream.getVideoTracks()[0];
-      if (track) {
-        try {
-          await track.applyConstraints({
-            aspectRatio: 1,
-            width: { ideal: 1080 },
-            height: { ideal: 1080 }
-          });
-        } catch {
-          // Not all cameras/browsers support these constraints.
-        }
-      }
-
-      if (videoEl) {
-        videoEl.srcObject = stream;
-        await videoEl.play();
-      }
+      stream = await startProfiledCamera('camera', videoEl);
     } catch {
       cameraError = 'Could not access webcam; use file upload instead.';
     }
@@ -78,6 +53,7 @@
 
   function stopCamera(): void {
     if (stream) {
+      rememberProfiledCamera('camera', stream);
       for (const track of stream.getTracks()) {
         track.stop();
       }

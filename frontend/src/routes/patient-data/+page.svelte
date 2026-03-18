@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import jsQR from 'jsqr';
   import { authedFetch } from '$lib/api';
+  import { rememberProfiledCamera, startProfiledCamera } from '$lib/camera';
   import { requireAuthRedirect } from '$lib/auth';
 
   let childName = '';
@@ -27,33 +28,7 @@
     }
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          aspectRatio: { ideal: 1 },
-          width: { ideal: 1080 },
-          height: { ideal: 1080 }
-        },
-        audio: false
-      });
-
-      const track = stream.getVideoTracks()[0];
-      if (track) {
-        try {
-          await track.applyConstraints({
-            aspectRatio: 1,
-            width: { ideal: 1080 },
-            height: { ideal: 1080 }
-          });
-        } catch {
-          // Not all cameras/browsers support these constraints.
-        }
-      }
-
-      if (videoEl) {
-        videoEl.srcObject = stream;
-        await videoEl.play();
-      }
+      stream = await startProfiledCamera('patient-data', videoEl);
       startQrScanner();
     } catch {
       cameraError = 'Could not access webcam; enter QR content manually.';
@@ -66,6 +41,7 @@
       scanHandle = null;
     }
     if (stream) {
+      rememberProfiledCamera('patient-data', stream);
       for (const track of stream.getTracks()) {
         track.stop();
       }
