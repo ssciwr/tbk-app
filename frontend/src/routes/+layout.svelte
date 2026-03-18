@@ -48,7 +48,7 @@
     </header>
   {/if}
 
-  <main class="app-main">
+  <main class="app-main" class:showcase-main={isCarouselShowcase}>
     <slot />
   </main>
 
@@ -75,6 +75,12 @@
 
   .app-main {
     flex: 1;
+  }
+
+  .app-main.showcase-main {
+    max-width: none;
+    width: 100%;
+    margin: 0;
   }
 
   .pipeline-header {

@@ -18,6 +18,7 @@
 
   type CarouselItem = ApiCarouselItem & {
     xray_src: string | null;
+    original_src: string | null;
   };
 
   type CarouselResponse = {
@@ -29,7 +30,6 @@
   let items: CarouselItem[] = [];
   let index = 0;
   let intervalMs = 5000;
-  let maxItems = 10;
 
   let status = '';
   let autoplayHandle: ReturnType<typeof setInterval> | null = null;
@@ -88,13 +88,13 @@
     }
 
     const data = (await response.json()) as CarouselResponse;
-    maxItems = data.max_items;
     intervalMs = Math.max(1000, data.autoplay_interval_seconds * 1000);
 
     const nextObjectUrls: string[] = [];
     const hydratedItems: CarouselItem[] = await Promise.all(
       data.items.map(async (item) => ({
         ...item,
+        original_src: await toProtectedImageSrc(item.original_url, nextObjectUrls),
         xray_src: await toProtectedImageSrc(item.xray_url, nextObjectUrls)
       }))
     );
@@ -134,34 +134,26 @@
 </script>
 
 <div class="card showcase-card">
-  <h1>Carousel</h1>
-  <p>Autoplaying the most recent {maxItems} approved X-Rays.</p>
-
   {#if items.length === 0}
     <p>No approved images yet.</p>
   {:else}
-    <p>
-      Showing {index + 1} / {items.length}
-      | Approved at {new Date(items[index].approved_at).toLocaleString()}
-    </p>
+    <div class="image-row">
+      <article class="image-panel">
+        {#if items[index].original_src}
+          <img class="preview" src={items[index].original_src} alt="Carousel original" style="width:100%;" />
+        {:else}
+          <div class="preview unavailable">Original image unavailable</div>
+        {/if}
+      </article>
 
-    <div class="meta-grid">
-      <p><strong>Case:</strong> #{items[index].case_id}</p>
-      <p><strong>Child:</strong> {items[index].metadata.child_name}</p>
-      <p><strong>Animal:</strong> {items[index].metadata.animal_name}</p>
-      <p><strong>QR:</strong> {items[index].metadata.qr_content}</p>
+      <article class="image-panel">
+        {#if items[index].xray_src}
+          <img class="preview" src={items[index].xray_src} alt="Carousel X-Ray" style="width:100%;" />
+        {:else}
+          <div class="preview unavailable">X-Ray unavailable</div>
+        {/if}
+      </article>
     </div>
-
-    {#if items[index].xray_src}
-      <img class="preview" src={items[index].xray_src} alt="Carousel X-Ray" style="width:min(100%, 1100px);" />
-    {:else}
-      <div
-        class="preview"
-        style="display:grid; place-items:center; min-height:300px; color:#6d6d6d; background:#f6f6f6; width:min(100%, 1100px);"
-      >
-        Image unavailable
-      </div>
-    {/if}
   {/if}
 
   {#if status}
@@ -171,17 +163,30 @@
 
 <style>
   .showcase-card {
-    max-width: 1200px;
-    margin: 1rem auto;
-  }
-
-  .meta-grid {
-    display: grid;
-    gap: 0.25rem;
-    margin: 0.6rem 0 0.9rem;
-  }
-
-  .meta-grid p {
+    width: 100%;
     margin: 0;
+  }
+
+  .image-row {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .unavailable {
+    display: grid;
+    place-items: center;
+    min-height: 280px;
+    color: #6d6d6d;
+    background: #f6f6f6;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  @media (max-width: 900px) {
+    .image-row {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
