@@ -65,7 +65,7 @@ test('results page supports confirm decision', async ({ page }) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [] }) });
   });
 
-  await page.goto('/results');
+  await page.goto('/review');
   await expect(page.getByText('Case #1')).toBeVisible();
 
   await page.getByRole('button', { name: 'Accept' }).first().click();

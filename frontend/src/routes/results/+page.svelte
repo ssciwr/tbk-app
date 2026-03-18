@@ -1,34 +1,40 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
 
-  type ApiPendingCase = {
+  type ApiCarouselItem = {
     case_id: number;
-    status: 'queued' | 'collecting_results' | 'retried' | 'awaiting_review';
-    received_results: number;
-    ready_for_review: boolean;
     metadata: {
       child_name: string;
       animal_name: string;
       broken_bone: boolean;
+      qr_content: string;
     };
+    xray_url: string;
     original_url: string;
-    result_urls: string[];
-    results_per_image: number;
+    approved_at: string;
   };
 
-  type PendingCase = Omit<ApiPendingCase, 'original_url' | 'result_urls'> & {
-    original_url: string | null;
-    result_urls: Array<string | null>;
+  type CarouselItem = ApiCarouselItem & {
+    xray_src: string | null;
+    original_src: string | null;
   };
 
-  let cases: PendingCase[] = [];
-  let loading = true;
-  let error = '';
-  let actionMessage = '';
-  let pollHandle: ReturnType<typeof setInterval> | null = null;
+  type CarouselResponse = {
+    items: ApiCarouselItem[];
+    max_items: number;
+    autoplay_interval_seconds: number;
+  };
+
+  let items: CarouselItem[] = [];
+  let index = 0;
+  let showOriginal = false;
+  let maxItems = 10;
+  let refreshMs = 5000;
+
+  let status = '';
+  let refreshHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
 
   function revokeObjectUrls(urls: string[]): void {
@@ -44,7 +50,6 @@
     if (url.startsWith('data:') || url.startsWith('blob:')) {
       return url;
     }
-
     const response = await authedFetchUrl(url);
     if (!response.ok) {
       return null;
@@ -55,66 +60,59 @@
     return objectUrl;
   }
 
-  async function hydrateCaseImages(
-    pending: ApiPendingCase,
-    objectUrls: string[]
-  ): Promise<PendingCase> {
-    const [originalSrc, resultSrcs] = await Promise.all([
-      toProtectedImageSrc(pending.original_url, objectUrls),
-      Promise.all(pending.result_urls.map((url) => toProtectedImageSrc(url, objectUrls)))
-    ]);
-
-    return {
-      ...pending,
-      original_url: originalSrc,
-      result_urls: resultSrcs
-    };
+  function restartRefresh(): void {
+    if (refreshHandle) {
+      clearInterval(refreshHandle);
+      refreshHandle = null;
+    }
+    refreshHandle = setInterval(loadItems, refreshMs);
   }
 
-  function resultSlots(pending: PendingCase): Array<string | null> {
-    return Array.from({ length: pending.results_per_image }, (_, index) => pending.result_urls[index] ?? null);
-  }
-
-  async function loadPending(): Promise<void> {
-    const response = await authedFetch('/api/review/pending');
+  async function loadItems(): Promise<void> {
+    const response = await authedFetch('/api/carousel');
     if (!response.ok) {
-      error = 'Failed to load pending review cases.';
-      loading = false;
+      status = 'Failed to load recent results.';
       return;
     }
 
-    const data = (await response.json()) as { cases: ApiPendingCase[] };
+    const data = (await response.json()) as CarouselResponse;
+    maxItems = data.max_items;
+    refreshMs = Math.max(1000, data.autoplay_interval_seconds * 1000);
+
     const nextObjectUrls: string[] = [];
-    const hydratedCases = await Promise.all(
-      data.cases.map((pending) => hydrateCaseImages(pending, nextObjectUrls))
+    const hydratedItems: CarouselItem[] = await Promise.all(
+      data.items.map(async (item) => ({
+        ...item,
+        xray_src: await toProtectedImageSrc(item.xray_url, nextObjectUrls),
+        original_src: await toProtectedImageSrc(item.original_url, nextObjectUrls)
+      }))
     );
+
     const previousObjectUrls = activeObjectUrls;
     activeObjectUrls = nextObjectUrls;
     revokeObjectUrls(previousObjectUrls);
-    cases = hydratedCases;
-    loading = false;
+    items = hydratedItems;
+    status = '';
+
+    if (index >= items.length) {
+      index = Math.max(0, items.length - 1);
+    }
+
+    restartRefresh();
   }
 
-  async function decide(caseId: number, action: 'confirm' | 'retry' | 'cancel', choiceIndex: number | null): Promise<void> {
-    actionMessage = '';
-    const response = await authedFetch(`/api/review/${caseId}/decision`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, choice_index: choiceIndex })
-    });
-
-    if (!response.ok) {
-      actionMessage = `Failed to ${action} case ${caseId}.`;
+  function next(): void {
+    if (items.length === 0) {
       return;
     }
+    index = (index + 1) % items.length;
+  }
 
-    if (action === 'confirm') {
-      await goto('/fracture');
+  function prev(): void {
+    if (items.length === 0) {
       return;
     }
-
-    actionMessage = `Case ${caseId}: ${action} applied.`;
-    await loadPending();
+    index = (index - 1 + items.length) % items.length;
   }
 
   onMount(async () => {
@@ -123,14 +121,12 @@
       return;
     }
 
-    await loadPending();
-    pollHandle = setInterval(loadPending, 2000);
+    await loadItems();
   });
 
   onDestroy(() => {
-    if (pollHandle) {
-      clearInterval(pollHandle);
-      pollHandle = null;
+    if (refreshHandle) {
+      clearInterval(refreshHandle);
     }
     revokeObjectUrls(activeObjectUrls);
     activeObjectUrls = [];
@@ -138,221 +134,107 @@
 </script>
 
 <div class="card">
-  <h1>Review Results</h1>
-  <p>Accept one generated X-Ray, reject all and retry, or cancel the case.</p>
+  <div style="display:flex; gap:0.6rem; flex-wrap:wrap; margin-bottom:0.8rem;">
+    <button on:click={prev} disabled={items.length === 0}>Prev</button>
+    <button on:click={next} disabled={items.length === 0}>Next</button>
+  </div>
 
-  {#if actionMessage}
-    <p>{actionMessage}</p>
-  {/if}
-  {#if error}
-    <p style="color:#b23a48;">{error}</p>
-  {/if}
+  <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem;">
+    <input type="checkbox" bind:checked={showOriginal} style="width:auto;" />
+    Also show original image
+  </label>
 
-  {#if loading}
-    <p>Loading pending cases...</p>
-  {:else if cases.length === 0}
-    <p>No cases awaiting review.</p>
+  {#if items.length === 0}
+    <p>No approved images yet.</p>
   {:else}
-    <div class="grid">
-      {#each cases as pending}
-        <article class="card result-case">
-          <div class="case-layout">
-            <div class="case-top-row">
-              <section class="meta-panel">
-                <h2>Case #{pending.case_id}</h2>
-                <p class="meta-line">Child: {pending.metadata.child_name}</p>
-                <p class="meta-line">Animal: {pending.metadata.animal_name}</p>
-                {#if !pending.ready_for_review}
-                  <p class="generation-note">
-                    Image currently generating ({pending.received_results}/{pending.results_per_image})
-                  </p>
-                {/if}
-                <div class="meta-actions">
-                  <button
-                    class="secondary"
-                    on:click={() => decide(pending.case_id, 'retry', null)}
-                    disabled={!pending.ready_for_review}
-                  >
-                    Reject All
-                  </button>
-                  <button class="warn" on:click={() => decide(pending.case_id, 'cancel', null)}>Cancel</button>
-                </div>
-              </section>
+    <p>
+      Showing {index + 1} / {items.length}
+      | Approved at {new Date(items[index].approved_at).toLocaleString()}
+    </p>
 
-              <section class="original-panel">
-                <h3>Original</h3>
-                {#if pending.original_url}
-                  <img
-                    class="preview original-image"
-                    src={pending.original_url}
-                    alt={`Original for case ${pending.case_id}`}
-                  />
-                {:else}
-                  <div class="preview-frame">Original image unavailable</div>
-                {/if}
-              </section>
-            </div>
-
-            <section class="candidates-panel">
-              <h3>Candidates</h3>
-              <div class="candidate-grid">
-                {#each resultSlots(pending) as resultUrl, index}
-                  <article class="candidate-card">
-                    {#if resultUrl}
-                      <img class="preview candidate-image" src={resultUrl} alt={`Result ${index} for case ${pending.case_id}`} />
-                      <button class="ok" on:click={() => decide(pending.case_id, 'confirm', index)}>Accept</button>
-                    {:else}
-                      <div class="preview-frame">Image currently generating</div>
-                    {/if}
-                  </article>
-                {/each}
-              </div>
-            </section>
-          </div>
-        </article>
-      {/each}
+    <div class="meta-grid">
+      <p><strong>Case:</strong> #{items[index].case_id}</p>
+      <p><strong>Child:</strong> {items[index].metadata.child_name}</p>
+      <p><strong>Animal:</strong> {items[index].metadata.animal_name}</p>
+      <p><strong>QR:</strong> {items[index].metadata.qr_content}</p>
     </div>
+
+    {#if showOriginal}
+      <div class="image-row">
+        <article class="image-panel">
+          <h3>Original</h3>
+          {#if items[index].original_src}
+            <img
+              class="preview"
+              src={items[index].original_src}
+              alt="Case original"
+              style="width:100%;"
+            />
+          {:else}
+            <div class="preview unavailable">Original image unavailable</div>
+          {/if}
+        </article>
+
+        <article class="image-panel">
+          <h3>X-Ray</h3>
+          {#if items[index].xray_src}
+            <img
+              class="preview"
+              src={items[index].xray_src}
+              alt="Case X-Ray"
+              style="width:100%;"
+            />
+          {:else}
+            <div class="preview unavailable">X-Ray unavailable</div>
+          {/if}
+        </article>
+      </div>
+    {:else if items[index].xray_src}
+      <img
+        class="preview"
+        src={items[index].xray_src}
+        alt="Case X-Ray"
+        style="width:min(100%, 900px);"
+      />
+    {:else}
+      <div class="preview unavailable" style="width:min(100%, 900px);">X-Ray unavailable</div>
+    {/if}
+  {/if}
+
+  {#if status}
+    <p style="color:#b23a48;">{status}</p>
   {/if}
 </div>
 
 <style>
-  .result-case {
-    background: #fff;
-  }
-
-  .case-layout {
+  .meta-grid {
     display: grid;
-    gap: 1rem;
+    gap: 0.25rem;
+    margin: 0.6rem 0 0.9rem;
   }
 
-  .case-top-row {
-    display: grid;
-    grid-template-columns: minmax(200px, 260px) minmax(250px, 320px);
-    justify-content: center;
-    align-items: start;
-    column-gap: 2.4rem;
-    row-gap: 1rem;
-  }
-
-  .meta-panel {
-    display: grid;
-    gap: 0.5rem;
-    align-content: start;
-  }
-
-  .meta-panel h2 {
+  .meta-grid p {
     margin: 0;
   }
 
-  .meta-line {
-    margin: 0;
-    font-size: 1.8rem;
-    line-height: 1.05;
-    font-weight: 700;
-  }
-
-  .generation-note {
-    margin: 0.2rem 0 0;
-    color: #5e646c;
-    font-size: 0.95rem;
-  }
-
-  .meta-actions {
-    margin-top: 0.35rem;
+  .image-row {
     display: grid;
-    gap: 0.45rem;
-    max-width: 220px;
+    gap: 0.8rem;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    max-width: 1100px;
   }
 
-  .meta-actions button {
-    width: 100%;
+  .image-panel h3 {
+    margin: 0 0 0.4rem;
   }
 
-  .original-panel {
-    display: grid;
-    gap: 0.5rem;
-    justify-items: center;
-  }
-
-  .original-panel h3,
-  .candidates-panel h3 {
-    margin: 0;
-  }
-
-  .original-image {
-    width: min(100%, 290px);
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
-  }
-
-  .preview-frame {
-    width: min(100%, 290px);
-    aspect-ratio: 1 / 1;
+  .unavailable {
     display: grid;
     place-items: center;
-    padding: 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    min-height: 240px;
     color: #6d6d6d;
     background: #f6f6f6;
-    text-align: center;
-  }
-
-  .candidates-panel {
-    border-top: 1px solid var(--border);
-    padding-top: 0.9rem;
-    display: grid;
-    gap: 0.6rem;
-  }
-
-  .candidate-grid {
-    display: grid;
-    gap: 0.9rem;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  }
-
-  .candidate-card {
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 0.7rem;
-    background: #fff;
-    display: grid;
-    gap: 0.55rem;
-    align-content: start;
-  }
-
-  .candidate-image {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
-  }
-
-  .candidate-card button {
-    width: 100%;
-  }
-
-  .candidate-card .preview-frame {
-    width: 100%;
-  }
-
-  @media (max-width: 900px) {
-    .case-top-row {
-      grid-template-columns: 1fr;
-      justify-content: stretch;
-      column-gap: 0;
-    }
-
-    .meta-actions {
-      max-width: none;
-    }
-
-    .original-panel {
-      justify-items: stretch;
-    }
-
-    .original-image,
-    .preview-frame {
-      width: 100%;
-    }
   }
 </style>

@@ -234,7 +234,7 @@
       return;
     }
 
-    await goto('/results');
+    await goto('/review');
   }
 
   onMount(async () => {

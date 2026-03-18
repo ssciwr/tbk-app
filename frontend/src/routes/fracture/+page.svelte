@@ -85,7 +85,7 @@
       return;
     }
 
-    await goto('/carousel');
+    await goto('/results');
   }
 
   onMount(async () => {

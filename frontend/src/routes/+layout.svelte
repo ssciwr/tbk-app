@@ -7,9 +7,9 @@
   const pipelineStages = [
     { href: '/patient-data', label: 'Patient data', stage: 1 },
     { href: '/camera', label: 'Acquire image', stage: 2 },
-    { href: '/results', label: 'Review X-Ray', stage: 3 },
+    { href: '/review', label: 'Review X-Ray', stage: 3 },
     { href: '/fracture', label: 'Apply fractures', stage: 4 },
-    { href: '/carousel', label: 'View Results', stage: 5 }
+    { href: '/results', label: 'View Results', stage: 5 }
   ];
 
   function logout(): void {
@@ -23,7 +23,7 @@
 
   let isCarouselShowcase = false;
   $: isCarouselShowcase =
-    $page.url.pathname === '/carousel-live' || $page.url.pathname.startsWith('/carousel-live/');
+    $page.url.pathname === '/carousel' || $page.url.pathname.startsWith('/carousel/');
 </script>
 
 <div class="app-shell">
@@ -56,7 +56,7 @@
     {#if isCarouselShowcase}
       <a href="/patient-data">X-Ray Pipeline</a>
     {:else}
-      <a href="/carousel-live">Carousel</a>
+      <a href="/carousel">Carousel</a>
     {/if}
     <a href="/admin">QR-Code generation</a>
     <a href="/about">About</a>
