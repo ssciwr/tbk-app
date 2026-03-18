@@ -98,6 +98,7 @@ async def review_decision(
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
 ) -> dict[str, str]:
+    next_stage = "review"
     try:
         if payload.action == "confirm":
             if payload.choice_index is None:
@@ -105,10 +106,22 @@ async def review_decision(
                     status_code=400, detail="choice_index is required for confirm"
                 )
             services.queue.confirm_case(case_id, payload.choice_index)
+            if services.settings.FRACTURE_EDITOR_ENABLED:
+                next_stage = "fracture"
+            else:
+                selected = services.queue.get_selected_result(case_id)
+                services.queue.finalize_case(
+                    case_id,
+                    output_xray=selected,
+                    storage=services.storage,
+                )
+                next_stage = "results"
         elif payload.action == "retry":
             services.queue.retry_case(case_id)
+            next_stage = "review"
         else:
             services.queue.cancel_case(case_id)
+            next_stage = "review"
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except IndexError as exc:
@@ -116,4 +129,4 @@ async def review_decision(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return {"status": "success"}
+    return {"status": "success", "next_stage": next_stage}

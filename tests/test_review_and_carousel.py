@@ -243,3 +243,42 @@ async def test_carousel_max_size_eviction(
     assert carousel.status_code == 200
     items = carousel.json()["items"]
     assert len(items) == 2  # CAROUSEL_SIZE in test settings
+
+
+@pytest.mark.anyio
+async def test_review_confirm_skips_fracture_when_feature_disabled(
+    client_fracture_disabled: AsyncClient,
+    auth_headers_fracture_disabled: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    config_response = await client_fracture_disabled.get(
+        "/api/config", headers=auth_headers_fracture_disabled
+    )
+    assert config_response.status_code == 200
+    assert config_response.json()["fracture_editor_enabled"] is False
+
+    case_id = await _create_case_ready_for_review(
+        client_fracture_disabled, auth_headers_fracture_disabled, png_bytes
+    )
+
+    decision = await client_fracture_disabled.post(
+        f"/api/review/{case_id}/decision",
+        headers=auth_headers_fracture_disabled,
+        json={"action": "confirm", "choice_index": 0},
+    )
+    assert decision.status_code == 200
+    assert decision.json()["next_stage"] == "results"
+
+    pending_fracture = await client_fracture_disabled.get(
+        "/api/fracture/pending", headers=auth_headers_fracture_disabled
+    )
+    assert pending_fracture.status_code == 200
+    assert pending_fracture.json()["cases"] == []
+
+    carousel = await client_fracture_disabled.get(
+        "/api/carousel", headers=auth_headers_fracture_disabled
+    )
+    assert carousel.status_code == 200
+    items = carousel.json()["items"]
+    assert len(items) == 1
+    assert items[0]["case_id"] == case_id

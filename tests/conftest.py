@@ -21,6 +21,7 @@ def settings(tmp_path: Path) -> Settings:
         JWT_SECRET_KEY="test-secret-key",
         RESULTS_PER_IMAGE=3,
         CAROUSEL_SIZE=2,
+        FRACTURE_EDITOR_ENABLED=True,
         STORAGE_PROVIDER="local",
         LOCAL_STORAGE_ROOT=tmp_path / "storage",
         CORS_ORIGINS=["http://localhost:3000"],
@@ -43,6 +44,30 @@ async def client(app) -> AsyncClient:
 
 
 @pytest.fixture
+def settings_fracture_disabled(tmp_path: Path) -> Settings:
+    return Settings(
+        SHARED_PASSWORD="test-password",
+        JWT_SECRET_KEY="test-secret-key",
+        RESULTS_PER_IMAGE=3,
+        CAROUSEL_SIZE=2,
+        FRACTURE_EDITOR_ENABLED=False,
+        STORAGE_PROVIDER="local",
+        LOCAL_STORAGE_ROOT=tmp_path / "storage",
+        CORS_ORIGINS=["http://localhost:3000"],
+    )
+
+
+@pytest.fixture
+async def client_fracture_disabled(settings_fracture_disabled: Settings) -> AsyncClient:
+    app = create_app(settings_fracture_disabled)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as async_client:
+        yield async_client
+
+
+@pytest.fixture
 def png_bytes() -> bytes:
     image = Image.new("RGB", (32, 32), color=(120, 40, 220))
     buf = io.BytesIO()
@@ -53,6 +78,18 @@ def png_bytes() -> bytes:
 @pytest.fixture
 async def auth_headers(client: AsyncClient) -> dict[str, str]:
     response = await client.post("/api/auth/token", data={"password": "test-password"})
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def auth_headers_fracture_disabled(
+    client_fracture_disabled: AsyncClient,
+) -> dict[str, str]:
+    response = await client_fracture_disabled.post(
+        "/api/auth/token", data={"password": "test-password"}
+    )
     assert response.status_code == 200
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

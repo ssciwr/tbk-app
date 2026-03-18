@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import FractureEditorInline from '$lib/components/FractureEditorInline.svelte';
-  import { authedFetch, authedFetchUrl } from '$lib/api';
+  import { authedFetch, authedFetchUrl, loadAppConfig } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
 
   type FinalizeAction = 'proceed_without_breaking' | 'apply_bone_breaking';
@@ -100,6 +100,12 @@
   onMount(async () => {
     const token = await requireAuthRedirect();
     if (!token) {
+      return;
+    }
+
+    const config = await loadAppConfig();
+    if (!config.fracture_editor_enabled) {
+      await goto('/results');
       return;
     }
 

@@ -108,8 +108,18 @@
       return;
     }
 
+    let nextStage: 'fracture' | 'results' | undefined;
+    try {
+      const payload = (await response.json()) as { next_stage?: string };
+      if (payload.next_stage === 'fracture' || payload.next_stage === 'results') {
+        nextStage = payload.next_stage;
+      }
+    } catch {
+      // Keep default transition when no payload is available.
+    }
+
     if (action === 'confirm') {
-      await goto('/fracture');
+      await goto(nextStage === 'results' ? '/results' : '/fracture');
       return;
     }
 

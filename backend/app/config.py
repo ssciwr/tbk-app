@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     RESULTS_PER_IMAGE: int = 3
     CAROUSEL_SIZE: int = 10
     CAROUSEL_AUTOPLAY_SECONDS: int = 5
+    FRACTURE_EDITOR_ENABLED: bool = True
 
     STORAGE_PROVIDER: Literal["local", "seafile"] = "local"
 

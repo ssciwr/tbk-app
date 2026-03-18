@@ -1,15 +1,25 @@
 <script lang="ts">
   import '../app.css';
+  import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { authToken, clearToken } from '$lib/api';
+  import { authToken, clearToken, loadAppConfig } from '$lib/api';
   import { goto } from '$app/navigation';
 
-  const pipelineStages = [
-    { href: '/patient-data', label: 'Patient data', stage: 1 },
-    { href: '/camera', label: 'Acquire image', stage: 2 },
-    { href: '/review', label: 'Review X-Ray', stage: 3 },
-    { href: '/fracture', label: 'Apply fractures', stage: 4 },
-    { href: '/results', label: 'View Results', stage: 5 }
+  type StageKey = 'patient-data' | 'camera' | 'review' | 'fracture' | 'results';
+  type PipelineStage = {
+    key: StageKey;
+    href: string;
+    label: string;
+    stage: number;
+    enabled: boolean;
+  };
+
+  const basePipelineStages: Array<Omit<PipelineStage, 'enabled'>> = [
+    { key: 'patient-data', href: '/patient-data', label: 'Patient data', stage: 1 },
+    { key: 'camera', href: '/camera', label: 'Acquire image', stage: 2 },
+    { key: 'review', href: '/review', label: 'Review X-Ray', stage: 3 },
+    { key: 'fracture', href: '/fracture', label: 'Apply fractures', stage: 4 },
+    { key: 'results', href: '/results', label: 'View Results', stage: 5 }
   ];
 
   function logout(): void {
@@ -22,6 +32,38 @@
   }
 
   let isCarouselShowcase = false;
+  let fractureStageEnabled = true;
+  let configLoadingForToken: string | null = null;
+  let pipelineStages: PipelineStage[] = [];
+
+  async function syncAppConfig(force = false): Promise<void> {
+    if (!$authToken) {
+      fractureStageEnabled = true;
+      return;
+    }
+
+    if (configLoadingForToken === $authToken && !force) {
+      return;
+    }
+
+    configLoadingForToken = $authToken;
+    const config = await loadAppConfig(force);
+    fractureStageEnabled = config.fracture_editor_enabled;
+  }
+
+  $: pipelineStages = basePipelineStages.map((stage) => ({
+    ...stage,
+    enabled: stage.key === 'fracture' ? fractureStageEnabled : true
+  }));
+
+  onMount(() => {
+    void syncAppConfig(true);
+  });
+
+  $: if ($authToken) {
+    void syncAppConfig();
+  }
+
   $: isCarouselShowcase =
     $page.url.pathname === '/carousel' || $page.url.pathname.startsWith('/carousel/');
 </script>
@@ -31,15 +73,22 @@
     <header class="pipeline-header">
       <div class="pipeline-track">
         {#each pipelineStages as stage, index}
-          <a
-            href={stage.href}
-            class="stage-chip"
-            class:active={isActive($page.url.pathname, stage.href)}
-            aria-current={isActive($page.url.pathname, stage.href) ? 'page' : undefined}
-          >
-            <span class="stage-number">Stage {stage.stage}</span>
-            <span class="stage-label">{stage.label}</span>
-          </a>
+          {#if stage.enabled}
+            <a
+              href={stage.href}
+              class="stage-chip"
+              class:active={isActive($page.url.pathname, stage.href)}
+              aria-current={isActive($page.url.pathname, stage.href) ? 'page' : undefined}
+            >
+              <span class="stage-number">Stage {stage.stage}</span>
+              <span class="stage-label">{stage.label}</span>
+            </a>
+          {:else}
+            <span class="stage-chip disabled" aria-disabled="true">
+              <span class="stage-number">Stage {stage.stage}</span>
+              <span class="stage-label">{stage.label}</span>
+            </span>
+          {/if}
           {#if index < pipelineStages.length - 1}
             <span class="stage-arrow" aria-hidden="true">→</span>
           {/if}
@@ -120,6 +169,14 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 2px rgba(14, 124, 123, 0.18);
     background: #f4fbfb;
+  }
+
+  .stage-chip.disabled {
+    opacity: 0.5;
+    background: #f1f3f4;
+    border-style: dashed;
+    box-shadow: none;
+    color: #5f676f;
   }
 
   .stage-number {
