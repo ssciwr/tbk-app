@@ -313,15 +313,17 @@
     {#if previewUrl}
       <img class="preview captured-frame" src={previewUrl} alt="Captured teddy" />
     {:else}
-      <video
-        bind:this={videoEl}
-        autoplay
-        playsinline
-        muted
-        disablePictureInPicture
-        disableRemotePlayback
-        class="preview"
-      ></video>
+      <div class="camera-feed">
+        <video
+          bind:this={videoEl}
+          autoplay
+          playsinline
+          muted
+          disablePictureInPicture
+          disableRemotePlayback
+          class="preview"
+        ></video>
+      </div>
     {/if}
 
     <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
@@ -383,7 +385,21 @@
     flex-wrap: wrap;
   }
 
-  video.preview,
+  .camera-feed {
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #121212;
+    overflow: hidden;
+  }
+
+  .camera-feed video.preview {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+  }
+
   img.captured-frame {
     display: block;
     width: 100%;

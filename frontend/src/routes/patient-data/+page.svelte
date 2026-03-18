@@ -184,15 +184,17 @@
 <div class="grid cols-2">
   <section class="card">
     <h1>Patient Data & QR Scan</h1>
-    <video
-      bind:this={videoEl}
-      autoplay
-      playsinline
-      muted
-      disablePictureInPicture
-      disableRemotePlayback
-      class="preview"
-    ></video>
+    <div class="camera-feed">
+      <video
+        bind:this={videoEl}
+        autoplay
+        playsinline
+        muted
+        disablePictureInPicture
+        disableRemotePlayback
+        class="preview"
+      ></video>
+    </div>
     <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
       <button type="button" class="secondary" on:click={scanNowFromCamera}>Scan QR Now</button>
     </div>
@@ -230,15 +232,18 @@
 </div>
 
 <style>
-  video.preview {
+  .camera-feed {
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #121212;
+    overflow: hidden;
+  }
+
+  .camera-feed video.preview {
     display: block;
     width: 100%;
     max-width: 100%;
     aspect-ratio: 1 / 1;
     object-fit: cover;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: #121212;
-    overflow: hidden;
   }
 </style>
