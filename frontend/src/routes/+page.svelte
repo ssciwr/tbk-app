@@ -1,13 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { requireAuthRedirect } from '$lib/auth';
+  import { goto } from '$app/navigation';
 
   onMount(async () => {
-    await requireAuthRedirect();
+    await goto('/camera');
   });
 </script>
-
-<div class="card">
-  <h1>Teddy Hospital X-Ray</h1>
-  <p>This dashboard coordinates image capture, AI result review, and the X-Ray carousel.</p>
-</div>
