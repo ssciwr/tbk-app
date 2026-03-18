@@ -16,11 +16,18 @@ async def carousel_list(
     request: Request,
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
-) -> dict[str, list[dict[str, str]]]:
+) -> dict[str, list[dict] | int]:
     items = []
     for idx, item in enumerate(services.queue.carousel_items()):
         items.append(
             {
+                "case_id": item.case_id,
+                "metadata": {
+                    "child_name": item.metadata.child_name,
+                    "animal_name": item.metadata.animal_name,
+                    "broken_bone": item.broken_bone,
+                    "qr_content": item.owner_ref,
+                },
                 "xray_url": str(
                     request.url_for("carousel_image", index=idx, kind="xray")
                 ),
@@ -30,7 +37,11 @@ async def carousel_list(
                 "approved_at": item.approved_at.isoformat(),
             }
         )
-    return {"items": items}
+    return {
+        "items": items,
+        "max_items": services.settings.CAROUSEL_SIZE,
+        "autoplay_interval_seconds": services.settings.CAROUSEL_AUTOPLAY_SECONDS,
+    }
 
 
 @router.get("/carousel/{index}/{kind}", name="carousel_image")

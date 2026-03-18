@@ -90,6 +90,10 @@ async def test_review_confirm_transition(
     assert carousel.status_code == 200
     items = carousel.json()["items"]
     assert len(items) == 1
+    assert items[0]["case_id"] == case_id
+    assert items[0]["metadata"]["child_name"] == "Max"
+    assert items[0]["metadata"]["animal_name"] == "Bunny"
+    assert items[0]["metadata"]["qr_content"] == "1"
 
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
     assert (storage_root / "1" / "normal" / f"{case_id}_original.png").exists()

@@ -20,33 +20,44 @@
   function isActive(pathname: string, href: string): boolean {
     return pathname === href || pathname.startsWith(`${href}/`);
   }
+
+  let isCarouselShowcase = false;
+  $: isCarouselShowcase =
+    $page.url.pathname === '/carousel-live' || $page.url.pathname.startsWith('/carousel-live/');
 </script>
 
 <div class="app-shell">
-  <header class="pipeline-header">
-    <div class="pipeline-track">
-      {#each pipelineStages as stage, index}
-        <a
-          href={stage.href}
-          class="stage-chip"
-          class:active={isActive($page.url.pathname, stage.href)}
-          aria-current={isActive($page.url.pathname, stage.href) ? 'page' : undefined}
-        >
-          <span class="stage-number">Stage {stage.stage}</span>
-          <span class="stage-label">{stage.label}</span>
-        </a>
-        {#if index < pipelineStages.length - 1}
-          <span class="stage-arrow" aria-hidden="true">→</span>
-        {/if}
-      {/each}
-    </div>
-  </header>
+  {#if !isCarouselShowcase}
+    <header class="pipeline-header">
+      <div class="pipeline-track">
+        {#each pipelineStages as stage, index}
+          <a
+            href={stage.href}
+            class="stage-chip"
+            class:active={isActive($page.url.pathname, stage.href)}
+            aria-current={isActive($page.url.pathname, stage.href) ? 'page' : undefined}
+          >
+            <span class="stage-number">Stage {stage.stage}</span>
+            <span class="stage-label">{stage.label}</span>
+          </a>
+          {#if index < pipelineStages.length - 1}
+            <span class="stage-arrow" aria-hidden="true">→</span>
+          {/if}
+        {/each}
+      </div>
+    </header>
+  {/if}
 
   <main class="app-main">
     <slot />
   </main>
 
   <footer class="layout-footer">
+    {#if isCarouselShowcase}
+      <a href="/patient-data">X-Ray Pipeline</a>
+    {:else}
+      <a href="/carousel-live">Carousel</a>
+    {/if}
     <a href="/admin">QR-Code generation</a>
     <a href="/about">About</a>
     {#if $authToken}

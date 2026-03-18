@@ -39,6 +39,10 @@ class CaseRecord:
 
 @dataclass(slots=True)
 class CarouselItem:
+    case_id: int
+    owner_ref: str
+    metadata: CaseMetadata
+    broken_bone: bool
     original_bytes: bytes
     xray_bytes: bytes
     approved_at: datetime

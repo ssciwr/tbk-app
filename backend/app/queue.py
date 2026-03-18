@@ -252,6 +252,10 @@ class CaseQueue:
 
             self._carousel.appendleft(
                 CarouselItem(
+                    case_id=case.case_id,
+                    owner_ref=case.owner_ref,
+                    metadata=case.metadata,
+                    broken_bone=case.broken_bone,
                     original_bytes=case.original_bytes,
                     xray_bytes=output_xray,
                     approved_at=approved_at,

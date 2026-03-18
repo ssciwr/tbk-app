@@ -18,7 +18,6 @@
 
   type CarouselItem = ApiCarouselItem & {
     xray_src: string | null;
-    original_src: string | null;
   };
 
   type CarouselResponse = {
@@ -29,11 +28,11 @@
 
   let items: CarouselItem[] = [];
   let index = 0;
-  let showOriginal = false;
+  let intervalMs = 5000;
   let maxItems = 10;
-  let refreshMs = 5000;
 
   let status = '';
+  let autoplayHandle: ReturnType<typeof setInterval> | null = null;
   let refreshHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
 
@@ -60,31 +59,43 @@
     return objectUrl;
   }
 
-  function restartRefresh(): void {
+  function next(): void {
+    if (items.length === 0) {
+      return;
+    }
+    index = (index + 1) % items.length;
+  }
+
+  function restartTimers(): void {
+    if (autoplayHandle) {
+      clearInterval(autoplayHandle);
+      autoplayHandle = null;
+    }
     if (refreshHandle) {
       clearInterval(refreshHandle);
       refreshHandle = null;
     }
-    refreshHandle = setInterval(loadItems, refreshMs);
+
+    autoplayHandle = setInterval(next, intervalMs);
+    refreshHandle = setInterval(loadItems, intervalMs);
   }
 
   async function loadItems(): Promise<void> {
     const response = await authedFetch('/api/carousel');
     if (!response.ok) {
-      status = 'Failed to load recent results.';
+      status = 'Failed to load carousel.';
       return;
     }
 
     const data = (await response.json()) as CarouselResponse;
     maxItems = data.max_items;
-    refreshMs = Math.max(1000, data.autoplay_interval_seconds * 1000);
+    intervalMs = Math.max(1000, data.autoplay_interval_seconds * 1000);
 
     const nextObjectUrls: string[] = [];
     const hydratedItems: CarouselItem[] = await Promise.all(
       data.items.map(async (item) => ({
         ...item,
-        xray_src: await toProtectedImageSrc(item.xray_url, nextObjectUrls),
-        original_src: await toProtectedImageSrc(item.original_url, nextObjectUrls)
+        xray_src: await toProtectedImageSrc(item.xray_url, nextObjectUrls)
       }))
     );
 
@@ -98,21 +109,7 @@
       index = Math.max(0, items.length - 1);
     }
 
-    restartRefresh();
-  }
-
-  function next(): void {
-    if (items.length === 0) {
-      return;
-    }
-    index = (index + 1) % items.length;
-  }
-
-  function prev(): void {
-    if (items.length === 0) {
-      return;
-    }
-    index = (index - 1 + items.length) % items.length;
+    restartTimers();
   }
 
   onMount(async () => {
@@ -125,6 +122,9 @@
   });
 
   onDestroy(() => {
+    if (autoplayHandle) {
+      clearInterval(autoplayHandle);
+    }
     if (refreshHandle) {
       clearInterval(refreshHandle);
     }
@@ -133,16 +133,9 @@
   });
 </script>
 
-<div class="card">
-  <div style="display:flex; gap:0.6rem; flex-wrap:wrap; margin-bottom:0.8rem;">
-    <button on:click={prev} disabled={items.length === 0}>Prev</button>
-    <button on:click={next} disabled={items.length === 0}>Next</button>
-  </div>
-
-  <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem;">
-    <input type="checkbox" bind:checked={showOriginal} style="width:auto;" />
-    Also show original image
-  </label>
+<div class="card showcase-card">
+  <h1>Carousel</h1>
+  <p>Autoplaying the most recent {maxItems} approved X-Rays.</p>
 
   {#if items.length === 0}
     <p>No approved images yet.</p>
@@ -159,45 +152,15 @@
       <p><strong>QR:</strong> {items[index].metadata.qr_content}</p>
     </div>
 
-    {#if showOriginal}
-      <div class="image-row">
-        <article class="image-panel">
-          <h3>Original</h3>
-          {#if items[index].original_src}
-            <img
-              class="preview"
-              src={items[index].original_src}
-              alt="Case original"
-              style="width:100%;"
-            />
-          {:else}
-            <div class="preview unavailable">Original image unavailable</div>
-          {/if}
-        </article>
-
-        <article class="image-panel">
-          <h3>X-Ray</h3>
-          {#if items[index].xray_src}
-            <img
-              class="preview"
-              src={items[index].xray_src}
-              alt="Case X-Ray"
-              style="width:100%;"
-            />
-          {:else}
-            <div class="preview unavailable">X-Ray unavailable</div>
-          {/if}
-        </article>
-      </div>
-    {:else if items[index].xray_src}
-      <img
-        class="preview"
-        src={items[index].xray_src}
-        alt="Case X-Ray"
-        style="width:min(100%, 900px);"
-      />
+    {#if items[index].xray_src}
+      <img class="preview" src={items[index].xray_src} alt="Carousel X-Ray" style="width:min(100%, 1100px);" />
     {:else}
-      <div class="preview unavailable" style="width:min(100%, 900px);">X-Ray unavailable</div>
+      <div
+        class="preview"
+        style="display:grid; place-items:center; min-height:300px; color:#6d6d6d; background:#f6f6f6; width:min(100%, 1100px);"
+      >
+        Image unavailable
+      </div>
     {/if}
   {/if}
 
@@ -207,6 +170,11 @@
 </div>
 
 <style>
+  .showcase-card {
+    max-width: 1200px;
+    margin: 1rem auto;
+  }
+
   .meta-grid {
     display: grid;
     gap: 0.25rem;
@@ -215,26 +183,5 @@
 
   .meta-grid p {
     margin: 0;
-  }
-
-  .image-row {
-    display: grid;
-    gap: 0.8rem;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    max-width: 1100px;
-  }
-
-  .image-panel h3 {
-    margin: 0 0 0.4rem;
-  }
-
-  .unavailable {
-    display: grid;
-    place-items: center;
-    min-height: 240px;
-    color: #6d6d6d;
-    background: #f6f6f6;
-    border: 1px solid var(--border);
-    border-radius: 10px;
   }
 </style>

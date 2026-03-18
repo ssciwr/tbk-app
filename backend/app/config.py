@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
     RESULTS_PER_IMAGE: int = 3
-    CAROUSEL_SIZE: int = 50
+    CAROUSEL_SIZE: int = 10
+    CAROUSEL_AUTOPLAY_SECONDS: int = 5
 
     STORAGE_PROVIDER: Literal["local", "seafile"] = "local"
 
