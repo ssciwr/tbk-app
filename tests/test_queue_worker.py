@@ -95,7 +95,7 @@ async def test_case_upload_and_queue_insertion(
     assert next_job.headers["content-type"].startswith("image/png")
     assert int(next_job.headers["X-Case-Id"]) == case_id
     assert next_job.headers["X-Child-Name"] == "Ada"
-    assert next_job.headers["X-Workflow"] == settings.GENERATION_MODEL
+    assert next_job.headers["X-Workflow"] == settings.GENERATION_MODELS[0]
     assert "X-Last-Name" not in next_job.headers
 
 
@@ -149,3 +149,46 @@ async def test_worker_result_submission_until_review_ready(
     cases = pending.json()["cases"]
     assert len(cases) == 1
     assert cases[0]["case_id"] == case_id
+
+
+@pytest.mark.anyio
+async def test_review_retry_switches_case_workflow_model(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    case_id = await _upload_case(client, auth_headers, png_bytes)
+    assert (
+        await client.get("/api/worker/jobs/next", headers=auth_headers)
+    ).status_code == 200
+
+    for _ in range(3):
+        submitted = await client.post(
+            f"/api/worker/jobs/{case_id}/results",
+            headers=auth_headers,
+            files={"result": ("result.png", io.BytesIO(png_bytes), "image/png")},
+        )
+        assert submitted.status_code == 200
+
+    pending = await client.get("/api/review/pending", headers=auth_headers)
+    assert pending.status_code == 200
+    pending_cases = pending.json()["cases"]
+    assert pending_cases and pending_cases[0]["case_id"] == case_id
+    assert pending_cases[0]["used_model"] == "FLUX_Kontext"
+    assert pending_cases[0]["available_models"] == [
+        "FLUX_Kontext",
+        "IP_Adapter_SDXL",
+        "ChromaV44",
+    ]
+
+    retry = await client.post(
+        f"/api/review/{case_id}/decision",
+        headers=auth_headers,
+        json={"action": "retry", "choice_index": None, "generation_model": "ChromaV44"},
+    )
+    assert retry.status_code == 200
+
+    next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert next_job.status_code == 200
+    assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert next_job.headers["X-Workflow"] == "ChromaV44"

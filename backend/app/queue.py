@@ -40,6 +40,7 @@ class CaseQueue:
         owner_ref: str,
         metadata: CaseMetadata,
         broken_bone: bool,
+        generation_model: str,
     ) -> CaseRecord:
         with self._lock:
             case_id = self._next_case_id
@@ -50,6 +51,7 @@ class CaseQueue:
                 owner_ref=owner_ref,
                 metadata=metadata,
                 broken_bone=broken_bone,
+                generation_model=generation_model,
                 expected_results=self.results_per_image,
                 state=CaseState.METADATA_ENTERED,
             )
@@ -270,7 +272,13 @@ class CaseQueue:
             case.results.clear()
             case.selected_result_bytes = None
 
-    def retry_case(self, case_id: int) -> None:
+    def retry_case(
+        self,
+        case_id: int,
+        *,
+        generation_model: str | None = None,
+        default_generation_model: str | None = None,
+    ) -> None:
         with self._lock:
             case = self._cases.get(case_id)
             if case is None:
@@ -281,6 +289,9 @@ class CaseQueue:
             case.results.clear()
             case.selected_result_bytes = None
             case.dispatches = 0
+            case.generation_model = (
+                generation_model or default_generation_model or case.generation_model
+            )
             case.state = CaseState.RETRIED
             self._awaiting_review.discard(case_id)
             self._dispatch_queue.append(case_id)

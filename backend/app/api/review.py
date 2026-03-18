@@ -15,6 +15,7 @@ router = APIRouter(prefix="/review", tags=["review"])
 class ReviewDecisionRequest(BaseModel):
     action: Literal["confirm", "retry", "cancel"]
     choice_index: int | None = None
+    generation_model: str | None = None
 
 
 @router.get("/pending")
@@ -36,6 +37,8 @@ async def review_pending(
                     "animal_name": case.metadata.animal_name,
                     "broken_bone": case.broken_bone,
                 },
+                "used_model": case.generation_model,
+                "available_models": services.settings.GENERATION_MODELS,
                 "original_url": str(
                     request.url_for("review_original", case_id=case.case_id)
                 ),
@@ -117,7 +120,22 @@ async def review_decision(
                 )
                 next_stage = "results"
         elif payload.action == "retry":
-            services.queue.retry_case(case_id)
+            if (
+                payload.generation_model is not None
+                and payload.generation_model not in services.settings.GENERATION_MODELS
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Unsupported generation_model '{payload.generation_model}'. "
+                        f"Allowed: {services.settings.GENERATION_MODELS}"
+                    ),
+                )
+            services.queue.retry_case(
+                case_id,
+                generation_model=payload.generation_model,
+                default_generation_model=services.settings.GENERATION_MODELS[0],
+            )
             next_stage = "review"
         else:
             services.queue.cancel_case(case_id)

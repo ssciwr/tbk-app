@@ -28,6 +28,7 @@ class CaseRecord:
     owner_ref: str
     metadata: CaseMetadata
     broken_bone: bool
+    generation_model: str
     expected_results: int
     original_bytes: bytes | None = None
     results: list[bytes] = field(default_factory=list)

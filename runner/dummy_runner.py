@@ -16,7 +16,13 @@ class DummyRunner:
         self.poll_seconds = float(os.getenv("RUNNER_POLL_SECONDS", "2"))
         self.process_seconds = float(os.getenv("RUNNER_PROCESS_SECONDS", "5"))
         self.timeout_seconds = float(os.getenv("RUNNER_HTTP_TIMEOUT_SECONDS", "30"))
-        self.default_workflow = os.getenv("GENERATION_MODEL", "FLUX_Kontext")
+        configured_models = os.getenv("GENERATION_MODELS", "").strip()
+        configured_default = (
+            configured_models.split(",")[0].strip()
+            if configured_models
+            else os.getenv("GENERATION_MODEL", "").strip()
+        )
+        self.default_workflow = configured_default or "FLUX_Kontext"
 
         self.session = requests.Session()
         self.token: str | None = None
