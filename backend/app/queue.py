@@ -114,6 +114,15 @@ class CaseQueue:
             ]
             return sorted(cases, key=lambda case: case.case_id, reverse=True)
 
+    def pending_fracture(self) -> list[CaseRecord]:
+        with self._lock:
+            cases = [
+                case
+                for case in self._cases.values()
+                if case.state == CaseState.PENDING_FRACTURE
+            ]
+            return sorted(cases, key=lambda case: case.case_id, reverse=True)
+
     def get_review_original(self, case_id: int) -> bytes:
         with self._lock:
             case = self._cases.get(case_id)
@@ -130,9 +139,7 @@ class CaseQueue:
                 raise IndexError("Result index out of range")
             return case.results[index]
 
-    def confirm_case(
-        self, case_id: int, choice_index: int, storage: StorageProvider
-    ) -> None:
+    def confirm_case(self, case_id: int, choice_index: int) -> None:
         with self._lock:
             case = self._cases.get(case_id)
             if case is None:
@@ -142,7 +149,36 @@ class CaseQueue:
             if choice_index < 0 or choice_index >= len(case.results):
                 raise IndexError("Invalid choice index")
 
-            selected = case.results[choice_index]
+            case.selected_result_bytes = case.results[choice_index]
+            case.state = CaseState.PENDING_FRACTURE
+            self._awaiting_review.discard(case_id)
+
+    def get_selected_result(self, case_id: int) -> bytes:
+        with self._lock:
+            case = self._cases.get(case_id)
+            if case is None:
+                raise KeyError("Case not found")
+            if (
+                case.state != CaseState.PENDING_FRACTURE
+                or case.selected_result_bytes is None
+            ):
+                raise ValueError("Case is not pending fracture")
+            return case.selected_result_bytes
+
+    def finalize_case(
+        self,
+        case_id: int,
+        *,
+        output_xray: bytes,
+        storage: StorageProvider,
+    ) -> None:
+        with self._lock:
+            case = self._cases.get(case_id)
+            if case is None:
+                raise KeyError("Case not found")
+            if case.state != CaseState.PENDING_FRACTURE:
+                raise ValueError("Case is not pending fracture")
+
             storage.upload_file(
                 case.owner_ref,
                 "normal",
@@ -152,19 +188,19 @@ class CaseQueue:
             storage.upload_file(
                 case.owner_ref,
                 "xray",
-                BytesIO(selected),
+                BytesIO(output_xray),
                 f"{case.case_id}_result.png",
             )
 
             approved_at = datetime.now(tz=UTC)
             case.approved_at = approved_at
             case.state = CaseState.CONFIRMED
-            self._awaiting_review.discard(case_id)
+            case.selected_result_bytes = output_xray
 
             self._carousel.appendleft(
                 CarouselItem(
                     original_bytes=case.original_bytes,
-                    xray_bytes=selected,
+                    xray_bytes=output_xray,
                     approved_at=approved_at,
                 )
             )
@@ -180,6 +216,7 @@ class CaseQueue:
                 raise ValueError("Case is not pending review")
 
             case.results.clear()
+            case.selected_result_bytes = None
             case.dispatches = 0
             case.state = CaseState.RETRIED
             self._awaiting_review.discard(case_id)
@@ -192,6 +229,7 @@ class CaseQueue:
                 raise KeyError("Case not found")
 
             case.results.clear()
+            case.selected_result_bytes = None
             case.state = CaseState.CANCELED
             self._awaiting_review.discard(case_id)
             self._dispatch_queue = deque(

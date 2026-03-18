@@ -22,6 +22,7 @@
   <a href="/admin">Admin</a>
   <a href="/camera">Camera</a>
   <a href="/results">Results</a>
+  <a href="/fracture">Fracture</a>
   <a href="/carousel">Carousel</a>
   <a href="/about">About</a>
   {#if loggedIn}

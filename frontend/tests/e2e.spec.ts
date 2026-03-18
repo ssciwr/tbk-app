@@ -61,10 +61,13 @@ test('results page supports confirm decision', async ({ page }) => {
   await page.route('**/api/review/1/decision', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'success' }) });
   });
+  await page.route('**/api/fracture/pending', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [] }) });
+  });
 
   await page.goto('/results');
   await expect(page.getByText('Case #1')).toBeVisible();
 
   await page.getByRole('button', { name: 'Accept' }).first().click();
-  await expect(page.getByText('Case 1: confirm applied.')).toBeVisible();
+  await expect(page).toHaveURL(/\/fracture$/);
 });

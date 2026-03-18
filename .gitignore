@@ -36,6 +36,7 @@ backend/data/
 # Frontend artifacts
 frontend/node_modules/
 frontend/.svelte-kit/
+frontend/.svelte-kit-codex/
 frontend/.vite/
 frontend/dist/
 frontend/build/
@@ -56,4 +57,3 @@ old/qr.pdf
 old/frontend/node_modules/
 old/frontend/.svelte-kit/
 old/frontend/test-results/
-

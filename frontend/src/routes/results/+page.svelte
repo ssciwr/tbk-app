@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
@@ -107,21 +108,13 @@
       return;
     }
 
-    actionMessage = `Case ${caseId}: ${action} applied.`;
-    await loadPending();
-  }
-
-  async function applyFracture(caseId: number, resultIndex: number): Promise<void> {
-    const response = await authedFetch(`/api/fracture/cases/${caseId}/results/${resultIndex}`, {
-      method: 'POST'
-    });
-
-    if (!response.ok) {
-      actionMessage = `Failed to apply fracture overlay to case ${caseId}.`;
+    if (action === 'confirm') {
+      await goto('/fracture');
       return;
     }
 
-    actionMessage = `Fracture no-op applied to case ${caseId}, result ${resultIndex}.`;
+    actionMessage = `Case ${caseId}: ${action} applied.`;
+    await loadPending();
   }
 
   onMount(async () => {
@@ -146,7 +139,7 @@
 
 <div class="card">
   <h1>Review Results</h1>
-  <p>Confirm one generated X-Ray, retry generation, or cancel the case.</p>
+  <p>Accept one generated X-Ray, reject all and retry, or cancel the case.</p>
 
   {#if actionMessage}
     <p>{actionMessage}</p>
@@ -208,9 +201,6 @@
                     {#if resultUrl}
                       <img class="preview candidate-image" src={resultUrl} alt={`Result ${index} for case ${pending.case_id}`} />
                       <button class="ok" on:click={() => decide(pending.case_id, 'confirm', index)}>Accept</button>
-                      <button class="secondary" on:click={() => applyFracture(pending.case_id, index)}>
-                        Fracture Action
-                      </button>
                     {:else}
                       <div class="preview-frame">Image currently generating</div>
                     {/if}

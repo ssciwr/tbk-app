@@ -9,6 +9,7 @@ class CaseState(str, Enum):
     QUEUED = "queued"
     COLLECTING_RESULTS = "collecting_results"
     AWAITING_REVIEW = "awaiting_review"
+    PENDING_FRACTURE = "pending_fracture"
     CONFIRMED = "confirmed"
     RETRIED = "retried"
     CANCELED = "canceled"
@@ -29,6 +30,7 @@ class CaseRecord:
     original_bytes: bytes
     expected_results: int
     results: list[bytes] = field(default_factory=list)
+    selected_result_bytes: bytes | None = None
     state: CaseState = CaseState.QUEUED
     dispatches: int = 0
     approved_at: datetime | None = None

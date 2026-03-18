@@ -102,7 +102,7 @@ async def review_decision(
                 raise HTTPException(
                     status_code=400, detail="choice_index is required for confirm"
                 )
-            services.queue.confirm_case(case_id, payload.choice_index, services.storage)
+            services.queue.confirm_case(case_id, payload.choice_index)
         elif payload.action == "retry":
             services.queue.retry_case(case_id)
         else:

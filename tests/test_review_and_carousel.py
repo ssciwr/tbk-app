@@ -64,6 +64,22 @@ async def test_review_confirm_transition(
     )
     assert decision.status_code == 200
 
+    pending_fracture = await client.get("/api/fracture/pending", headers=auth_headers)
+    assert pending_fracture.status_code == 200
+    fracture_cases = pending_fracture.json()["cases"]
+    assert fracture_cases and fracture_cases[0]["case_id"] == case_id
+
+    carousel = await client.get("/api/carousel", headers=auth_headers)
+    assert carousel.status_code == 200
+    assert carousel.json()["items"] == []
+
+    finalized = await client.post(
+        f"/api/fracture/{case_id}/decision",
+        headers=auth_headers,
+        json={"action": "proceed_without_breaking"},
+    )
+    assert finalized.status_code == 200
+
     carousel = await client.get("/api/carousel", headers=auth_headers)
     assert carousel.status_code == 200
     items = carousel.json()["items"]
@@ -125,6 +141,12 @@ async def test_carousel_max_size_eviction(
             json={"action": "confirm", "choice_index": 0},
         )
         assert confirmed.status_code == 200
+        fractured = await client.post(
+            f"/api/fracture/{case_id}/decision",
+            headers=auth_headers,
+            json={"action": "proceed_without_breaking"},
+        )
+        assert fractured.status_code == 200
 
     carousel = await client.get("/api/carousel", headers=auth_headers)
     assert carousel.status_code == 200
