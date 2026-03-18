@@ -231,11 +231,12 @@ class CaseQueue:
                 raise ValueError("Case is not pending fracture")
             if case.original_bytes is None:
                 raise ValueError("Case has no acquired image")
+            original_bytes = case.original_bytes
 
             storage.upload_file(
                 case.owner_ref,
                 "normal",
-                BytesIO(case.original_bytes),
+                BytesIO(original_bytes),
                 f"{case.case_id}_original.png",
             )
             storage.upload_file(
@@ -248,7 +249,6 @@ class CaseQueue:
             approved_at = datetime.now(tz=UTC)
             case.approved_at = approved_at
             case.state = CaseState.CONFIRMED
-            case.selected_result_bytes = output_xray
 
             self._carousel.appendleft(
                 CarouselItem(
@@ -256,13 +256,19 @@ class CaseQueue:
                     owner_ref=case.owner_ref,
                     metadata=case.metadata,
                     broken_bone=case.broken_bone,
-                    original_bytes=case.original_bytes,
+                    original_bytes=original_bytes,
                     xray_bytes=output_xray,
                     approved_at=approved_at,
                 )
             )
             while len(self._carousel) > self.carousel_size:
                 self._carousel.pop()
+
+            # Keep case records lightweight once finalized. Recent images remain
+            # available via the bounded carousel buffer.
+            case.original_bytes = None
+            case.results.clear()
+            case.selected_result_bytes = None
 
     def retry_case(self, case_id: int) -> None:
         with self._lock:
@@ -285,6 +291,7 @@ class CaseQueue:
             if case is None:
                 raise KeyError("Case not found")
 
+            case.original_bytes = None
             case.results.clear()
             case.selected_result_bytes = None
             case.state = CaseState.CANCELED

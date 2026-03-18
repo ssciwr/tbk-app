@@ -246,6 +246,56 @@ async def test_carousel_max_size_eviction(
 
 
 @pytest.mark.anyio
+async def test_finalize_releases_case_images_but_keeps_recent_carousel_window(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+    app,
+) -> None:
+    case_ids: list[int] = []
+    for index in range(3):
+        case_id = await _create_case_ready_for_review(
+            client, auth_headers, png_bytes, qr_content=str(index + 1)
+        )
+        case_ids.append(case_id)
+        confirmed = await client.post(
+            f"/api/review/{case_id}/decision",
+            headers=auth_headers,
+            json={"action": "confirm", "choice_index": 0},
+        )
+        assert confirmed.status_code == 200
+        finalized = await client.post(
+            f"/api/fracture/{case_id}/decision",
+            headers=auth_headers,
+            json={"action": "proceed_without_breaking"},
+        )
+        assert finalized.status_code == 200
+
+        record = app.state.services.queue.get_case(case_id)
+        assert record is not None
+        assert record.state.value == "confirmed"
+        assert record.original_bytes is None
+        assert record.results == []
+        assert record.selected_result_bytes is None
+
+    carousel = await client.get("/api/carousel", headers=auth_headers)
+    assert carousel.status_code == 200
+    items = carousel.json()["items"]
+    assert len(items) == 2
+
+    for index in range(len(items)):
+        original = await client.get(
+            f"/api/carousel/{index}/original", headers=auth_headers
+        )
+        assert original.status_code == 200
+        xray = await client.get(f"/api/carousel/{index}/xray", headers=auth_headers)
+        assert xray.status_code == 200
+
+    evicted = await client.get("/api/carousel/2/original", headers=auth_headers)
+    assert evicted.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_review_confirm_skips_fracture_when_feature_disabled(
     client_fracture_disabled: AsyncClient,
     auth_headers_fracture_disabled: dict[str, str],
