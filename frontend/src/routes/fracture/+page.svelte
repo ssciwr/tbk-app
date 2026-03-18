@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
@@ -84,8 +85,7 @@
       return;
     }
 
-    actionMessage = `Case ${caseId}: submitted successfully.`;
-    await loadPending();
+    await goto('/carousel');
   }
 
   onMount(async () => {
