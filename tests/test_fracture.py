@@ -51,7 +51,7 @@ async def _create_case_pending_fracture(
 
 
 @pytest.mark.anyio
-async def test_fracture_preview_noop(
+async def test_fracture_preview_applies_effect(
     client: AsyncClient,
     auth_headers: dict[str, str],
     png_bytes: bytes,
@@ -66,7 +66,40 @@ async def test_fracture_preview_noop(
         data={"x": "5", "y": "5", "scale": "1.2", "noise": "3"},
     )
     assert response.status_code == 200
-    assert response.content == png_bytes
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG")
+    assert response.content != png_bytes
+
+
+@pytest.mark.anyio
+async def test_fracture_preview_scale_and_noise_change_result(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    low = await client.post(
+        "/api/fracture/preview",
+        headers=auth_headers,
+        files={
+            "image": ("input.png", io.BytesIO(png_bytes), "image/png"),
+            "overlay": ("overlay.png", io.BytesIO(png_bytes), "image/png"),
+        },
+        data={"x": "5", "y": "5", "scale": "0.6", "noise": "0"},
+    )
+    assert low.status_code == 200
+
+    high = await client.post(
+        "/api/fracture/preview",
+        headers=auth_headers,
+        files={
+            "image": ("input.png", io.BytesIO(png_bytes), "image/png"),
+            "overlay": ("overlay.png", io.BytesIO(png_bytes), "image/png"),
+        },
+        data={"x": "5", "y": "5", "scale": "1.8", "noise": "35"},
+    )
+    assert high.status_code == 200
+
+    assert low.content != high.content
 
 
 @pytest.mark.anyio

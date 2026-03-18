@@ -51,9 +51,16 @@ async def fracture_preview(
     noise: Annotated[int | None, Form()] = None,
     _: Annotated[dict, Depends(require_auth)] = None,
 ) -> Response:
-    _ = (overlay, x, y, scale, noise)  # Explicitly unused in no-op version.
     image_bytes = await image.read()
-    result = fracture_preview_passthrough(image_bytes)
+    overlay_bytes = await overlay.read() if overlay is not None else None
+    result = fracture_preview_passthrough(
+        image_bytes,
+        overlay_bytes=overlay_bytes,
+        x=x,
+        y=y,
+        scale=scale,
+        noise=noise,
+    )
     response = Response(content=result, media_type="image/png")
     apply_no_cache_headers(response)
     return response

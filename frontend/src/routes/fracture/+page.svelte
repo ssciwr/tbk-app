@@ -1,8 +1,11 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
+  import FractureEditorInline from '$lib/components/FractureEditorInline.svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
+
+  type FinalizeAction = 'proceed_without_breaking' | 'apply_bone_breaking';
 
   type ApiPendingFractureCase = {
     case_id: number;
@@ -21,6 +24,7 @@
   let loading = true;
   let error = '';
   let actionMessage = '';
+  let decidingCaseId: number | null = null;
   let pollHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
 
@@ -72,20 +76,25 @@
     loading = false;
   }
 
-  async function decide(caseId: number, action: 'proceed_without_breaking' | 'apply_bone_breaking'): Promise<void> {
+  async function decide(caseId: number, action: FinalizeAction): Promise<void> {
     actionMessage = '';
-    const response = await authedFetch(`/api/fracture/${caseId}/decision`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action })
-    });
+    decidingCaseId = caseId;
+    try {
+      const response = await authedFetch(`/api/fracture/${caseId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
 
-    if (!response.ok) {
-      actionMessage = `Failed to submit case ${caseId}.`;
-      return;
+      if (!response.ok) {
+        actionMessage = `Failed to submit case ${caseId}.`;
+        return;
+      }
+
+      await goto('/results');
+    } finally {
+      decidingCaseId = null;
     }
-
-    await goto('/results');
   }
 
   onMount(async () => {
@@ -95,7 +104,11 @@
     }
 
     await loadPending();
-    pollHandle = setInterval(loadPending, 2000);
+    pollHandle = setInterval(() => {
+      if (!loading && cases.length === 0) {
+        void loadPending();
+      }
+    }, 2000);
   });
 
   onDestroy(() => {
@@ -110,7 +123,7 @@
 
 <div class="card">
   <h1>Bone Breaking Stage</h1>
-  <p>Finalize each accepted image by proceeding directly or applying the dummy bone breaking step.</p>
+  <p>Use the fracture editor directly below each selected image, then finalize the case.</p>
 
   {#if actionMessage}
     <p>{actionMessage}</p>
@@ -130,25 +143,13 @@
           <h2>Case #{pending.case_id}</h2>
           <p><strong>Child:</strong> {pending.metadata.child_name}</p>
           <p><strong>Animal:</strong> {pending.metadata.animal_name}</p>
-
-          {#if pending.selected_url}
-            <img class="preview fracture-image" src={pending.selected_url} alt={`Selected result for case ${pending.case_id}`} />
-          {:else}
-            <div class="preview-frame">Selected image unavailable</div>
-          {/if}
-
-          <button
-            class="secondary"
-            on:click={() => decide(pending.case_id, 'proceed_without_breaking')}
-          >
-            Proceed without breaking a bone
-          </button>
-          <button
-            class="ok"
-            on:click={() => decide(pending.case_id, 'apply_bone_breaking')}
-          >
-            Apply bone breaking
-          </button>
+          <FractureEditorInline
+            caseId={pending.case_id}
+            caseLabel={`${pending.metadata.child_name} / ${pending.metadata.animal_name}`}
+            imageSrc={pending.selected_url}
+            busy={decidingCaseId === pending.case_id}
+            onFinalize={(action) => void decide(pending.case_id, action)}
+          />
         </article>
       {/each}
     </div>
@@ -159,12 +160,12 @@
   .fracture-grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }
 
   .fracture-card {
     display: grid;
-    gap: 0.6rem;
+    gap: 0.7rem;
     align-content: start;
     background: #fff;
   }
@@ -172,24 +173,5 @@
   .fracture-card h2,
   .fracture-card p {
     margin: 0;
-  }
-
-  .fracture-image {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
-  }
-
-  .preview-frame {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    display: grid;
-    place-items: center;
-    padding: 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    color: #6d6d6d;
-    background: #f6f6f6;
-    text-align: center;
   }
 </style>
