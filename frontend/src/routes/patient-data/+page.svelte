@@ -132,19 +132,6 @@
     return code?.data ?? null;
   }
 
-  async function scanNowFromCamera(): Promise<void> {
-    const detectedValue = await scanQrFromLiveCamera((window as any).BarcodeDetector
-      ? new (window as any).BarcodeDetector({ formats: ['qr_code'] })
-      : null);
-
-    if (detectedValue) {
-      qrContent = detectedValue;
-      scanStatus = 'QR code detected.';
-      return;
-    }
-    scanStatus = 'No QR code detected. Keep it in frame and try again.';
-  }
-
   async function submitCaseMetadata(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     submitMessage = '';
@@ -194,9 +181,6 @@
         disableRemotePlayback
         class="preview"
       ></video>
-    </div>
-    <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
-      <button type="button" class="secondary" on:click={scanNowFromCamera}>Scan QR Now</button>
     </div>
     {#if cameraError}
       <p style="color:#b23a48;">{cameraError}</p>
