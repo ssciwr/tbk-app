@@ -1,7 +1,12 @@
 import { env } from '$env/dynamic/public';
+import { writable } from 'svelte/store';
 
 const BASE = (env.PUBLIC_BACKEND_URL || '').trim().replace(/\/$/, '');
 const TOKEN_KEY = 'teddy_hospital_jwt';
+const initialToken =
+  typeof window === 'undefined' ? null : window.localStorage.getItem(TOKEN_KEY);
+
+export const authToken = writable<string | null>(initialToken);
 
 export function tokenKey(): string {
   return TOKEN_KEY;
@@ -26,10 +31,12 @@ export function getToken(): string | null {
 
 export function setToken(token: string): void {
   window.localStorage.setItem(TOKEN_KEY, token);
+  authToken.set(token);
 }
 
 export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
+  authToken.set(null);
 }
 
 export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {

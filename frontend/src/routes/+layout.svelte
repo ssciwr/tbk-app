@@ -1,11 +1,9 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/stores';
-  import { clearToken, getToken } from '$lib/api';
+  import { authToken, clearToken } from '$lib/api';
   import { goto } from '$app/navigation';
-  import { onMount } from 'svelte';
 
-  let loggedIn = false;
   const pipelineStages = [
     { href: '/camera', label: 'Acquire image', stage: 1 },
     { href: '/results', label: 'Review X-Ray', stage: 2 },
@@ -13,13 +11,8 @@
     { href: '/carousel', label: 'View Results', stage: 4 }
   ];
 
-  onMount(() => {
-    loggedIn = Boolean(getToken());
-  });
-
   function logout(): void {
     clearToken();
-    loggedIn = false;
     goto('/login');
   }
 
@@ -28,38 +21,50 @@
   }
 </script>
 
-<header class="pipeline-header">
-  <div class="pipeline-track">
-    {#each pipelineStages as stage, index}
-      <a
-        href={stage.href}
-        class="stage-chip"
-        class:active={isActive($page.url.pathname, stage.href)}
-        aria-current={isActive($page.url.pathname, stage.href) ? 'page' : undefined}
-      >
-        <span class="stage-number">Stage {stage.stage}</span>
-        <span class="stage-label">{stage.label}</span>
-      </a>
-      {#if index < pipelineStages.length - 1}
-        <span class="stage-arrow" aria-hidden="true">→</span>
-      {/if}
-    {/each}
-  </div>
-</header>
+<div class="app-shell">
+  <header class="pipeline-header">
+    <div class="pipeline-track">
+      {#each pipelineStages as stage, index}
+        <a
+          href={stage.href}
+          class="stage-chip"
+          class:active={isActive($page.url.pathname, stage.href)}
+          aria-current={isActive($page.url.pathname, stage.href) ? 'page' : undefined}
+        >
+          <span class="stage-number">Stage {stage.stage}</span>
+          <span class="stage-label">{stage.label}</span>
+        </a>
+        {#if index < pipelineStages.length - 1}
+          <span class="stage-arrow" aria-hidden="true">→</span>
+        {/if}
+      {/each}
+    </div>
+  </header>
 
-<main>
-  <slot />
-</main>
+  <main class="app-main">
+    <slot />
+  </main>
 
-<footer class="layout-footer">
-  <a href="/admin">QR-Code generation</a>
-  <a href="/about">About</a>
-  {#if loggedIn}
-    <button class="secondary" on:click={logout}>Logout</button>
-  {/if}
-</footer>
+  <footer class="layout-footer">
+    <a href="/admin">QR-Code generation</a>
+    <a href="/about">About</a>
+    {#if $authToken}
+      <a class="logout-link" href="/login" on:click|preventDefault={logout}>Logout</a>
+    {/if}
+  </footer>
+</div>
 
 <style>
+  .app-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .app-main {
+    flex: 1;
+  }
+
   .pipeline-header {
     padding: 0.8rem 1rem;
     border-bottom: 1px solid var(--border);
@@ -132,7 +137,7 @@
     color: var(--accent);
   }
 
-  .layout-footer button {
+  .layout-footer .logout-link {
     margin-left: auto;
   }
 
@@ -149,7 +154,7 @@
       width: 100%;
     }
 
-    .layout-footer button {
+    .layout-footer .logout-link {
       margin-left: 0;
     }
   }
