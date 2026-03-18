@@ -4,7 +4,6 @@ import adapter from '@sveltejs/adapter-node';
 const config = {
   kit: {
     adapter: adapter(),
-    outDir: '.svelte-kit-codex',
     alias: {
       $lib: 'src/lib'
     }

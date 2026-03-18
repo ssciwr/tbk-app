@@ -12,5 +12,5 @@
       "node"
     ]
   },
-  "extends": "./.svelte-kit-codex/tsconfig.json"
+  "extends": "./.svelte-kit/tsconfig.json"
 }
