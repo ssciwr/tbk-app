@@ -76,6 +76,7 @@ async def test_case_upload_and_queue_insertion(
     client: AsyncClient,
     auth_headers: dict[str, str],
     png_bytes: bytes,
+    settings,
 ) -> None:
     case_id = await _upload_case(client, auth_headers, png_bytes)
     assert case_id > 0
@@ -94,6 +95,7 @@ async def test_case_upload_and_queue_insertion(
     assert next_job.headers["content-type"].startswith("image/png")
     assert int(next_job.headers["X-Case-Id"]) == case_id
     assert next_job.headers["X-Child-Name"] == "Ada"
+    assert next_job.headers["X-Workflow"] == settings.GENERATION_MODEL
     assert "X-Last-Name" not in next_job.headers
 
 

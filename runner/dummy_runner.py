@@ -16,6 +16,7 @@ class DummyRunner:
         self.poll_seconds = float(os.getenv("RUNNER_POLL_SECONDS", "2"))
         self.process_seconds = float(os.getenv("RUNNER_PROCESS_SECONDS", "5"))
         self.timeout_seconds = float(os.getenv("RUNNER_HTTP_TIMEOUT_SECONDS", "30"))
+        self.default_workflow = os.getenv("GENERATION_MODEL", "FLUX_Kontext")
 
         self.session = requests.Session()
         self.token: str | None = None
@@ -65,7 +66,7 @@ class DummyRunner:
             )
         return response
 
-    def _next_job(self) -> tuple[int, bytes] | None:
+    def _next_job(self) -> tuple[int, str, bytes] | None:
         response = self._request_with_auth("GET", "/api/worker/jobs/next")
         if response.status_code == 204:
             return None
@@ -74,9 +75,10 @@ class DummyRunner:
         case_id_header = response.headers.get("X-Case-Id")
         if not case_id_header:
             raise RuntimeError("Worker job response missing X-Case-Id header.")
-        return int(case_id_header), response.content
+        workflow = response.headers.get("X-Workflow") or self.default_workflow
+        return int(case_id_header), workflow, response.content
 
-    def _manipulate_image(self, source: bytes) -> bytes:
+    def _generate_flux_kontext(self, source: bytes) -> bytes:
         with Image.open(io.BytesIO(source)) as image:
             rgb_image = image.convert("RGB")
 
@@ -89,6 +91,50 @@ class DummyRunner:
         output = io.BytesIO()
         contrasted.save(output, format="PNG")
         return output.getvalue()
+
+    def _generate_ip_adapter_sdxl(self, source: bytes) -> bytes:
+        with Image.open(io.BytesIO(source)) as image:
+            rgb_image = image.convert("RGB")
+
+        inverted = ImageOps.invert(rgb_image)
+        desaturated = ImageEnhance.Color(inverted).enhance(0.2)
+        brightened = ImageEnhance.Brightness(desaturated).enhance(1.15)
+        sharpened = ImageEnhance.Sharpness(brightened).enhance(1.3)
+
+        output = io.BytesIO()
+        sharpened.save(output, format="PNG")
+        return output.getvalue()
+
+    def _generate_chroma_v44(self, source: bytes) -> bytes:
+        with Image.open(io.BytesIO(source)) as image:
+            rgb_image = image.convert("RGB")
+
+        grayscale = ImageOps.grayscale(rgb_image)
+        autocontrasted = ImageOps.autocontrast(grayscale)
+        colorized = ImageOps.colorize(autocontrasted, black="#021015", white="#dbe8ea")
+        enhanced = ImageEnhance.Contrast(colorized).enhance(1.2)
+
+        output = io.BytesIO()
+        enhanced.save(output, format="PNG")
+        return output.getvalue()
+
+    def _generate_for_workflow(self, workflow: str, source: bytes) -> bytes:
+        generators = {
+            "FLUX_Kontext": self._generate_flux_kontext,
+            "IP_Adapter_SDXL": self._generate_ip_adapter_sdxl,
+            "ChromaV44": self._generate_chroma_v44,
+        }
+        generator = generators.get(workflow)
+        if generator is None:
+            logging.warning(
+                "Unknown workflow '%s', falling back to %s.",
+                workflow,
+                self.default_workflow,
+            )
+            generator = generators.get(
+                self.default_workflow, self._generate_flux_kontext
+            )
+        return generator(source)
 
     def _submit_result(self, case_id: int, image_bytes: bytes) -> dict:
         files = {
@@ -113,14 +159,15 @@ class DummyRunner:
                     time.sleep(self.poll_seconds)
                     continue
 
-                case_id, source_image = job
+                case_id, workflow, source_image = job
                 logging.info(
-                    "Picked case %s. Simulating generation (%.1fs)...",
+                    "Picked case %s (workflow=%s). Simulating generation (%.1fs)...",
                     case_id,
+                    workflow,
                     self.process_seconds,
                 )
                 time.sleep(self.process_seconds)
-                generated = self._manipulate_image(source_image)
+                generated = self._generate_for_workflow(workflow, source_image)
                 submission = self._submit_result(case_id, generated)
                 logging.info(
                     "Submitted result for case %s (%s/%s, ready_for_review=%s).",

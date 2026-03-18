@@ -14,7 +14,8 @@ router = APIRouter(tags=["config"])
 async def get_app_config(
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
-) -> dict[str, bool]:
+) -> dict[str, bool | str]:
     return {
         "fracture_editor_enabled": services.settings.FRACTURE_EDITOR_ENABLED,
+        "generation_model": services.settings.GENERATION_MODEL,
     }

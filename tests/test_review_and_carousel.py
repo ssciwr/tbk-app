@@ -306,6 +306,7 @@ async def test_review_confirm_skips_fracture_when_feature_disabled(
     )
     assert config_response.status_code == 200
     assert config_response.json()["fracture_editor_enabled"] is False
+    assert config_response.json()["generation_model"] == "FLUX_Kontext"
 
     case_id = await _create_case_ready_for_review(
         client_fracture_disabled, auth_headers_fracture_disabled, png_bytes

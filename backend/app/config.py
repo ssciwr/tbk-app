@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     CAROUSEL_SIZE: int = 10
     CAROUSEL_AUTOPLAY_SECONDS: int = 5
     FRACTURE_EDITOR_ENABLED: bool = True
+    GENERATION_MODEL: Literal["FLUX_Kontext", "IP_Adapter_SDXL", "ChromaV44"] = (
+        "FLUX_Kontext"
+    )
 
     STORAGE_PROVIDER: Literal["local", "seafile"] = "local"
 
