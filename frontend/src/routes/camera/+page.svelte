@@ -313,7 +313,15 @@
     {#if previewUrl}
       <img class="preview captured-frame" src={previewUrl} alt="Captured teddy" />
     {:else}
-      <video bind:this={videoEl} autoplay playsinline muted class="preview"></video>
+      <video
+        bind:this={videoEl}
+        autoplay
+        playsinline
+        muted
+        disablePictureInPicture
+        disableRemotePlayback
+        class="preview"
+      ></video>
     {/if}
 
     <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">

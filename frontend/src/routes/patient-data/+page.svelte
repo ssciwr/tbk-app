@@ -184,7 +184,15 @@
 <div class="grid cols-2">
   <section class="card">
     <h1>Patient Data & QR Scan</h1>
-    <video bind:this={videoEl} autoplay playsinline muted class="preview"></video>
+    <video
+      bind:this={videoEl}
+      autoplay
+      playsinline
+      muted
+      disablePictureInPicture
+      disableRemotePlayback
+      class="preview"
+    ></video>
     <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
       <button type="button" class="secondary" on:click={scanNowFromCamera}>Scan QR Now</button>
     </div>
