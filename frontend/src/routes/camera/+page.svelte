@@ -163,6 +163,12 @@
     previewUrl = URL.createObjectURL(file);
   }
 
+  function discardCaptured(): void {
+    capturedFile = null;
+    captureMessage = '';
+    revokePreview();
+  }
+
   async function captureFromWebcam(): Promise<void> {
     captureMessage = '';
     if (!videoEl || videoEl.readyState < 2) {
@@ -200,6 +206,11 @@
 
     setCaptured(new File([blob], `capture-${Date.now()}.png`, { type: 'image/png' }));
     captureMessage = 'Image captured.';
+  }
+
+  $: if (videoEl && stream && videoEl.srcObject !== stream) {
+    videoEl.srcObject = stream;
+    void videoEl.play();
   }
 
   function onFileChange(event: Event): void {
@@ -256,10 +267,18 @@
 <div class="grid cols-2">
   <section class="card">
     <h1>Camera & QR Scan</h1>
-    <video bind:this={videoEl} autoplay playsinline muted class="preview"></video>
+    {#if previewUrl}
+      <img class="preview captured-frame" src={previewUrl} alt="Captured teddy" />
+    {:else}
+      <video bind:this={videoEl} autoplay playsinline muted class="preview"></video>
+    {/if}
     <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
-      <button on:click={captureFromWebcam}>Capture</button>
-      <button type="button" class="secondary" on:click={scanNowFromCamera}>Scan QR Now</button>
+      <button type="button" on:click={previewUrl ? discardCaptured : captureFromWebcam}>
+        {previewUrl ? 'Discard image' : 'Capture'}
+      </button>
+      {#if !previewUrl}
+        <button type="button" class="secondary" on:click={scanNowFromCamera}>Scan QR Now</button>
+      {/if}
       <label class="secondary" style="display:inline-block; margin:0; padding:0.45rem 0.7rem; border-radius:8px; border:1px solid var(--border); cursor:pointer;">
         Upload File
         <input type="file" accept="image/*" on:change={onFileChange} style="display:none;" />
@@ -272,11 +291,6 @@
       <p style="color:#b23a48;">{cameraError}</p>
     {/if}
     <p>{scanStatus}</p>
-
-    {#if previewUrl}
-      <h3>Captured Preview</h3>
-      <img class="preview" src={previewUrl} alt="Captured teddy" />
-    {/if}
   </section>
 
   <section class="card">
@@ -317,5 +331,13 @@
     border: 1px solid var(--border);
     background: #121212;
     overflow: hidden;
+  }
+
+  img.captured-frame {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
   }
 </style>
