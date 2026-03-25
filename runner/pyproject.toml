@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tbk-runner"
 version = "0.1.0"
 description = "Polling worker runner for Teddy backend workflows"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.7,<9",
     "requests>=2.32.0,<3",
