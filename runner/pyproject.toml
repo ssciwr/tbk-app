@@ -17,7 +17,7 @@ dependencies = [
 tbk-runner = "runner.runner:cli"
 
 [tool.setuptools]
-packages = ["runner"]
+package-dir = {"" = "src"}
 
-[tool.setuptools.package-dir]
-runner = "."
+[tool.setuptools.packages.find]
+where = ["src"]

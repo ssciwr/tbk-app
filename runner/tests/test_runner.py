@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 import requests
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import runner.dummy as dummy_module
 import runner.runner as runner_module

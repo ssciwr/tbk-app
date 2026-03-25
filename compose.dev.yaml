@@ -43,6 +43,7 @@ services:
     environment:
       - BACKEND_URL=http://127.0.0.1:8000
       - RUNNER_POLL_SECONDS=2
+      - PYTHONPATH=/workspace/runner/src
     volumes:
       - .:/workspace
     working_dir: /workspace
