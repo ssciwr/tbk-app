@@ -80,7 +80,7 @@ NEGATIVE_PROMPT = "illustration, anime, drawing, artwork, bad hands, blurry, low
 
 # SDXL X-Ray Style Rewrite
 SDXL_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
-SDXL_LORA_PATH = "./your_sdxl_lora.safetensors"
+SDXL_LORA_PATH = "DD-xray-v1.safetensors"
 SDXL_LORA_SCALE = 0.8
 SDXL_STRENGTH = 0.4
 SDXL_GUIDANCE_SCALE = 5.0
