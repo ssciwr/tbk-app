@@ -233,7 +233,6 @@
                     class="secondary"
                     on:click={() =>
                       decide(pending.case_id, 'retry', null, selectedRetryModel(pending))}
-                    disabled={!pending.ready_for_review}
                   >
                     Retry generation
                   </button>

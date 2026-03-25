@@ -153,6 +153,43 @@ async def test_worker_result_submission_until_review_ready(
 
 
 @pytest.mark.anyio
+async def test_worker_failed_job_requeues_collecting_case(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    case_id = await _upload_case(client, auth_headers, png_bytes)
+    dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert dispatched.status_code == 200
+
+    first_result = await client.post(
+        f"/api/worker/jobs/{case_id}/results",
+        headers=auth_headers,
+        files={"result": ("result.png", io.BytesIO(png_bytes), "image/png")},
+    )
+    assert first_result.status_code == 200
+    assert first_result.json()["received_results"] == 1
+
+    failed = await client.post(
+        f"/api/worker/jobs/{case_id}/failed",
+        headers=auth_headers,
+    )
+    assert failed.status_code == 200
+    assert failed.json() == {"status": "requeued", "case_id": case_id}
+
+    pending = await client.get("/api/review/pending", headers=auth_headers)
+    assert pending.status_code == 200
+    pending_cases = pending.json()["cases"]
+    assert pending_cases and pending_cases[0]["case_id"] == case_id
+    assert pending_cases[0]["received_results"] == 0
+    assert pending_cases[0]["ready_for_review"] is False
+
+    next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert next_job.status_code == 200
+    assert int(next_job.headers["X-Case-Id"]) == case_id
+
+
+@pytest.mark.anyio
 async def test_review_retry_switches_case_workflow_model(
     client: AsyncClient,
     auth_headers: dict[str, str],

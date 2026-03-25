@@ -236,6 +236,26 @@ def test_backend_client_submit_result_posts_file_payload(monkeypatch) -> None:
     assert file_obj.read().startswith(b"\x89PNG")
 
 
+def test_backend_client_report_failed_job_posts_endpoint(monkeypatch) -> None:
+    client = runner_module.BackendClient(server="http://backend:8000", password="pw")
+    captured: dict[str, Any] = {}
+
+    def fake_request(method: str, path: str, **kwargs: Any) -> _FakeResponse:
+        captured["method"] = method
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return _FakeResponse(status_code=200, json_payload={"status": "requeued"})
+
+    monkeypatch.setattr(client, "_request_with_auth", fake_request)
+
+    payload = client.report_failed_job(11)
+
+    assert payload == {"status": "requeued"}
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/worker/jobs/11/failed"
+    assert captured["kwargs"] == {}
+
+
 def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
     source_image = _png_bytes()
 
@@ -317,6 +337,83 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
     assert all(
         image_bytes.startswith(b"\x89PNG") for _, image_bytes in fake_client.submissions
     )
+
+
+def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
+    source_image = _png_bytes()
+
+    class FakeWorkflow:
+        name = "dummy"
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            return None
+
+        def parameter_schema(self) -> dict[str, Any]:
+            return {"type": "object"}
+
+        def generate(
+            self,
+            img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            _num_images: int = 1,
+        ):
+            yield Image.new("RGB", img.size, color=(1, 2, 3))
+            raise RuntimeError("third image generation failed")
+
+    class FakeBackendClient:
+        instances: list["FakeBackendClient"] = []
+
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+            self.submissions: list[int] = []
+            self.reported_failures: list[int] = []
+            self._next_calls = 0
+            FakeBackendClient.instances.append(self)
+
+        def next_job(self) -> runner_module.Job | None:
+            self._next_calls += 1
+            if self._next_calls == 1:
+                return runner_module.Job(
+                    case_id=7,
+                    image_bytes=source_image,
+                    requested_workflow="dummy",
+                    requested_images=3,
+                    parameters={},
+                )
+            raise KeyboardInterrupt
+
+        def submit_result(self, case_id: int, _image_bytes: bytes) -> dict[str, Any]:
+            self.submissions.append(case_id)
+            return {
+                "status": "accepted",
+                "received_results": len(self.submissions),
+                "expected_results": 3,
+                "ready_for_review": False,
+            }
+
+        def report_failed_job(self, case_id: int) -> dict[str, Any]:
+            self.reported_failures.append(case_id)
+            return {"status": "requeued"}
+
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: FakeWorkflow())
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+        )
+
+    assert len(FakeBackendClient.instances) == 1
+    fake_client = FakeBackendClient.instances[0]
+    assert fake_client.submissions == [7]
+    assert fake_client.reported_failures == [7]
 
 
 def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:

@@ -13,6 +13,7 @@ from fastapi import (
 )
 
 from ..auth import require_auth
+from ..models import CaseState
 from ..state import Services, get_services
 from ..utils import apply_no_cache_headers, ensure_png
 
@@ -70,3 +71,30 @@ async def worker_submit_result(
         "expected_results": expected,
         "ready_for_review": ready_for_review,
     }
+
+
+@router.post("/jobs/{case_id}/failed")
+async def worker_report_job_failed(
+    case_id: int,
+    _: Annotated[dict, Depends(require_auth)],
+    services: Annotated[Services, Depends(get_services)],
+) -> dict[str, str | int]:
+    case = services.queue.get_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    # Late failure reports are harmless no-ops once a case has moved on.
+    if case.state in {
+        CaseState.PENDING_FRACTURE,
+        CaseState.CONFIRMED,
+        CaseState.CANCELED,
+        CaseState.AWAITING_REVIEW,
+    }:
+        return {"status": "ignored", "case_id": case_id}
+
+    try:
+        services.queue.retry_case(case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "requeued", "case_id": case_id}

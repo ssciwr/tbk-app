@@ -185,6 +185,11 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
+    def report_failed_job(self, case_id: int) -> dict[str, Any]:
+        response = self._request_with_auth("POST", f"/api/worker/jobs/{case_id}/failed")
+        response.raise_for_status()
+        return response.json()
+
 
 def _image_to_png_bytes(image: Image.Image) -> bytes:
     output = io.BytesIO()
@@ -279,28 +284,51 @@ def run_runner(
                 )
 
             submitted_count = 0
-            for submitted_count, image in enumerate(generated_images, start=1):
-                result = _image_to_png_bytes(image)
-                submission = client.submit_result(job.case_id, result)
-                logging.info(
-                    (
-                        "Submitted result %s for case %s (%s/%s, "
-                        "ready_for_review=%s)."
-                    ),
-                    submitted_count,
-                    job.case_id,
-                    submission.get("received_results"),
-                    submission.get("expected_results"),
-                    submission.get("ready_for_review"),
-                )
-
-            if submitted_count == 0:
-                raise RuntimeError(
-                    (
-                        f"Workflow '{workflow.name}' yielded no images for case "
-                        f"{job.case_id}."
+            try:
+                for submitted_count, image in enumerate(generated_images, start=1):
+                    result = _image_to_png_bytes(image)
+                    submission = client.submit_result(job.case_id, result)
+                    logging.info(
+                        (
+                            "Submitted result %s for case %s (%s/%s, "
+                            "ready_for_review=%s, status=%s)."
+                        ),
+                        submitted_count,
+                        job.case_id,
+                        submission.get("received_results"),
+                        submission.get("expected_results"),
+                        submission.get("ready_for_review"),
+                        submission.get("status"),
                     )
+
+                if submitted_count == 0:
+                    raise RuntimeError(
+                        (
+                            f"Workflow '{workflow.name}' yielded no images for case "
+                            f"{job.case_id}."
+                        )
+                    )
+            except Exception:
+                logging.exception(
+                    "Case %s failed after submitting %s/%s result image(s).",
+                    job.case_id,
+                    submitted_count,
+                    job.requested_images,
                 )
+                if submitted_count < job.requested_images:
+                    try:
+                        failure_report = client.report_failed_job(job.case_id)
+                        logging.info(
+                            "Reported failed job for case %s: %s.",
+                            job.case_id,
+                            failure_report.get("status"),
+                        )
+                    except Exception:
+                        logging.exception(
+                            "Failed to report job failure for case %s.",
+                            job.case_id,
+                        )
+                time.sleep(poll_seconds)
         except KeyboardInterrupt:
             raise
         except Exception:
