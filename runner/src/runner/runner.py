@@ -45,10 +45,48 @@ class BackendClient:
             f"{self.base_url}/api/auth/token",
             data={"password": self.password},
             timeout=self.timeout_seconds,
+            allow_redirects=False,
         )
-        response.raise_for_status()
-        payload = response.json()
-        self.token = payload["access_token"]
+        if response.is_redirect or response.is_permanent_redirect:
+            raise RuntimeError(
+                "Runner authentication request to /api/auth/token was redirected "
+                f"(base_url={self.base_url!r}, status={response.status_code}, "
+                f"location={response.headers.get('Location', '')!r}). "
+                "Use BACKEND_URL that points directly to the backend API origin."
+            )
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            allow_header = response.headers.get("Allow", "")
+            body_preview = response.text.strip().replace("\n", " ")
+            if len(body_preview) > 500:
+                body_preview = f"{body_preview[:500]}..."
+            raise RuntimeError(
+                "Runner authentication failed while requesting POST /api/auth/token "
+                f"(base_url={self.base_url!r}, status={response.status_code}, "
+                f"allow={allow_header!r}, body={body_preview!r}). "
+                "Verify BACKEND_URL points to the TBK backend and SHARED_PASSWORD matches."
+            ) from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            body_preview = response.text.strip().replace("\n", " ")
+            if len(body_preview) > 500:
+                body_preview = f"{body_preview[:500]}..."
+            raise RuntimeError(
+                "Runner authentication response from /api/auth/token was not valid JSON "
+                f"(base_url={self.base_url!r}, body={body_preview!r})."
+            ) from exc
+
+        access_token = payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise RuntimeError(
+                "Runner authentication response from /api/auth/token did not contain "
+                f"a valid 'access_token' (base_url={self.base_url!r}, payload={payload!r})."
+            )
+
+        self.token = access_token
         expires_in = int(payload.get("expires_in", 300))
         self.token_expires_at = now + max(expires_in, 30)
         logging.info("Authenticated runner against %s.", self.base_url)
