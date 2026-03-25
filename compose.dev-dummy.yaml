@@ -32,3 +32,22 @@ services:
     depends_on:
       - backend
     network_mode: host
+
+  dummy-runner:
+    build:
+      context: .
+      dockerfile: docker/backend.dev.Dockerfile
+    container_name: teddy-dummy-runner-dev
+    env_file:
+      - backend/.env
+    environment:
+      - BACKEND_URL=http://127.0.0.1:8000
+      - RUNNER_POLL_SECONDS=2
+      - PYTHONPATH=/workspace/runner/src
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: ["python", "-m", "runner.runner", "--workflow", "dummy"]
+    depends_on:
+      - backend
+    network_mode: host

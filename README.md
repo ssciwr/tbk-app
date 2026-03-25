@@ -61,7 +61,12 @@ Host-network development compose is the only supported dev setup.
 
 - Backend: `http://localhost:8000`
 - Frontend: `http://localhost:3000`
-- Dummy runner: included automatically as `dummy-runner` service (`python -m runner.runner --workflow dummy`)
+- Runner: connect an external real runner to `http://127.0.0.1:8000`
+
+If you need the old local mock runner setup, use:
+```bash
+docker compose -f compose.dev-dummy.yaml up --build
+```
 
 The runner package lives in `./runner` with sources under `./runner/src/runner`. It can be installed independently (for example on a GPU machine) with `pip install ./runner`. It exposes `tbk-runner --workflow dummy`.
 For the chroma workflow, install additional dependencies with `pip install -r runner/requirements-chroma.txt` and run with `tbk-runner --workflow chroma`.
