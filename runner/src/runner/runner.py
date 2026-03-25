@@ -294,29 +294,23 @@ def run_runner(
 )
 @click.option(
     "--vlm-server",
-    default=chroma.default_vlm_server,
-    show_default=False,
-    help="VLM base URL (falls back to VLM_SERVER or OPENAI_BASE_URL).",
+    help="VLM base URL.",
 )
 @click.option(
     "--vlm-server-key",
-    default=chroma.default_vlm_server_key,
-    show_default=False,
-    help="VLM API key (falls back to VLM_SERVER_KEY).",
+    help="VLM API key.",
 )
 @click.option(
     "--vlm-model-name",
-    default=chroma.default_vlm_model_name,
-    show_default=False,
-    help="VLM model name (falls back to VLM_MODEL_NAME or OPENAI_MODEL).",
+    help="VLM model name.",
 )
 def cli(
     workflow: str,
     server: str,
     password: str,
-    vlm_server: str,
-    vlm_server_key: str,
-    vlm_model_name: str,
+    vlm_server: str | None,
+    vlm_server_key: str | None,
+    vlm_model_name: str | None,
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,

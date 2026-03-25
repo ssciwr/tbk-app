@@ -1,4 +1,4 @@
-# Teddy Hospital X-Ray Reimplementation
+# Teddy Hospital X-Ray Application
 
 Monorepo for a Teddy Hospital X-Ray workflow:
 - `backend/`: FastAPI + TypeScript-compatible API contract (OpenAPI via `/docs`)
@@ -76,9 +76,11 @@ The dummy workflow polls `/api/worker/jobs/next`, waits 5 seconds per case, perf
 Optional runner env vars:
 - `RUNNER_POLL_SECONDS` (default `2`)
 - `RUNNER_HTTP_TIMEOUT_SECONDS` (default `30`)
-- `VLM_SERVER` / `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
-- `VLM_SERVER_KEY` (optional)
-- `VLM_MODEL_NAME` / `OPENAI_MODEL` (default `gpt-4.1-mini`)
+
+Chroma workflow VLM settings are passed explicitly via runner CLI options:
+- `--vlm-server`
+- `--vlm-server-key` (optional)
+- `--vlm-model-name`
 
 ### Production
 ```bash

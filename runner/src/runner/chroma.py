@@ -5,7 +5,6 @@ import base64
 import io
 import json
 import logging
-import os
 from pathlib import Path
 import random
 import urllib.error
@@ -87,24 +86,6 @@ SDXL_STRENGTH = 0.4
 SDXL_GUIDANCE_SCALE = 5.0
 SDXL_NUM_INFERENCE_STEPS = 15
 SDXL_PROMPT = "xray"
-
-
-def default_vlm_server() -> str:
-    return os.environ.get(
-        "VLM_SERVER",
-        os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    )
-
-
-def default_vlm_server_key() -> str:
-    return os.environ.get("VLM_SERVER_KEY", "")
-
-
-def default_vlm_model_name() -> str:
-    return os.environ.get(
-        "VLM_MODEL_NAME",
-        os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"),
-    )
 
 
 def _require_chroma_dependencies() -> None:
@@ -363,9 +344,9 @@ def generate_prompt_with_openai_compatible(
 
 class ChromaWorkflow(WorkflowBase, name="chroma"):
     def __init__(self) -> None:
-        self.vlm_server = default_vlm_server()
-        self.vlm_server_key = default_vlm_server_key()
-        self.vlm_model_name = default_vlm_model_name()
+        self.vlm_server = ""
+        self.vlm_server_key = ""
+        self.vlm_model_name = ""
 
         self._device: str | None = None
         self._dtype: Any = None
@@ -392,6 +373,10 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         _require_chroma_dependencies()
         assert torch is not None
         assert new_session is not None
+        if not self.vlm_server.strip():
+            raise RuntimeError("Chroma workflow requires --vlm-server to be set.")
+        if not self.vlm_model_name.strip():
+            raise RuntimeError("Chroma workflow requires --vlm-model-name to be set.")
 
         device, dtype = pick_device_dtype("auto", DTYPE)
         logging.info(
