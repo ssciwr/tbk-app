@@ -13,7 +13,7 @@ import click
 import requests
 from PIL import Image
 
-from . import dummy  # noqa: F401
+from . import chroma, dummy  # noqa: F401
 from .core import WorkflowBase, create_workflow, list_workflows
 
 
@@ -165,8 +165,24 @@ def _validate_parameters(
     return {}
 
 
-def run_runner(*, workflow_name: str, server: str, password: str) -> None:
+def run_runner(
+    *,
+    workflow_name: str,
+    server: str,
+    password: str,
+    vlm_server: str | None = None,
+    vlm_server_key: str | None = None,
+    vlm_model_name: str | None = None,
+) -> None:
     workflow = create_workflow(workflow_name)
+    configure = getattr(workflow, "configure", None)
+    if callable(configure):
+        configure(
+            vlm_server=vlm_server,
+            vlm_server_key=vlm_server_key,
+            vlm_model_name=vlm_model_name,
+        )
+
     if not workflow.is_available():
         raise click.ClickException(
             f"Workflow '{workflow.name}' is not available in this environment."
@@ -276,12 +292,44 @@ def run_runner(*, workflow_name: str, server: str, password: str) -> None:
     required=True,
     help="Shared worker password used to obtain backend auth tokens.",
 )
-def cli(workflow: str, server: str, password: str) -> None:
+@click.option(
+    "--vlm-server",
+    default=chroma.default_vlm_server,
+    show_default=False,
+    help="VLM base URL (falls back to VLM_SERVER or OPENAI_BASE_URL).",
+)
+@click.option(
+    "--vlm-server-key",
+    default=chroma.default_vlm_server_key,
+    show_default=False,
+    help="VLM API key (falls back to VLM_SERVER_KEY).",
+)
+@click.option(
+    "--vlm-model-name",
+    default=chroma.default_vlm_model_name,
+    show_default=False,
+    help="VLM model name (falls back to VLM_MODEL_NAME or OPENAI_MODEL).",
+)
+def cli(
+    workflow: str,
+    server: str,
+    password: str,
+    vlm_server: str,
+    vlm_server_key: str,
+    vlm_model_name: str,
+) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [runner] %(message)s",
     )
-    run_runner(workflow_name=workflow, server=server, password=password)
+    run_runner(
+        workflow_name=workflow,
+        server=server,
+        password=password,
+        vlm_server=vlm_server,
+        vlm_server_key=vlm_server_key,
+        vlm_model_name=vlm_model_name,
+    )
 
 
 if __name__ == "__main__":

@@ -30,6 +30,10 @@ class WorkflowBase:
         """Called once when starting the server with this workflow."""
         return None
 
+    def configure(self, **kwargs: Any) -> None:
+        """Apply runner-level configuration values before setup."""
+        return None
+
     def parameter_schema(self) -> dict[str, Any]:
         """Return a JSONSchema dictionary describing expected parameters."""
         return {

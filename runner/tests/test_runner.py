@@ -81,6 +81,23 @@ def test_create_workflow_is_case_insensitive_for_registered_workflows() -> None:
     assert "dummy" in list_workflows()
 
 
+def test_chroma_workflow_is_registered() -> None:
+    assert "chroma" in list_workflows()
+
+
+def test_chroma_setup_requires_dependency_file_when_imports_fail(monkeypatch) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.setattr(
+        chroma_module,
+        "_CHROMA_IMPORT_ERROR",
+        ImportError("No module named 'torch'"),
+    )
+    workflow = chroma_module.ChromaWorkflow()
+
+    with pytest.raises(RuntimeError, match="requirements-chroma.txt"):
+        workflow.setup()
+
+
 def test_dummy_workflow_generate_yields_seed_varied_images(monkeypatch) -> None:
     monkeypatch.setattr(dummy_module, "RUNNER_PROCESS_SECONDS", 0.0)
     workflow = dummy_module.DummyWorkflow()
@@ -253,3 +270,61 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
     assert all(
         image_bytes.startswith(b"\x89PNG") for _, image_bytes in fake_client.submissions
     )
+
+
+def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:
+    class FakeWorkflow:
+        name = "dummy"
+
+        def __init__(self) -> None:
+            self.configure_calls: list[dict[str, Any]] = []
+            self.setup_called = False
+
+        def configure(self, **kwargs: Any) -> None:
+            self.configure_calls.append(kwargs)
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            self.setup_called = True
+
+        def generate(
+            self,
+            _img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            _num_images: int = 1,
+        ):
+            if False:
+                yield None
+
+    class FakeBackendClient:
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+
+        def next_job(self) -> runner_module.Job | None:
+            raise KeyboardInterrupt
+
+    workflow = FakeWorkflow()
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: workflow)
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+            vlm_server="http://vlm.local:8001",
+            vlm_server_key="test-key",
+            vlm_model_name="gpt-4.1-mini",
+        )
+
+    assert workflow.setup_called is True
+    assert workflow.configure_calls == [
+        {
+            "vlm_server": "http://vlm.local:8001",
+            "vlm_server_key": "test-key",
+            "vlm_model_name": "gpt-4.1-mini",
+        }
+    ]

@@ -64,12 +64,16 @@ Host-network development compose is the only supported dev setup.
 - Dummy runner: included automatically as `dummy-runner` service (`python -m runner.runner --workflow dummy`)
 
 The runner package lives in `./runner` with sources under `./runner/src/runner`. It can be installed independently (for example on a GPU machine) with `pip install ./runner`. It exposes `tbk-runner --workflow dummy`.
+For the chroma workflow, install additional dependencies with `pip install -r runner/requirements-chroma.txt` and run with `tbk-runner --workflow chroma`.
 
 The dummy workflow polls `/api/worker/jobs/next`, waits 5 seconds per case, performs a simple image manipulation, and submits the result back to `/api/worker/jobs/{case_id}/results`.
 
 Optional runner env vars:
 - `RUNNER_POLL_SECONDS` (default `2`)
 - `RUNNER_HTTP_TIMEOUT_SECONDS` (default `30`)
+- `VLM_SERVER` / `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
+- `VLM_SERVER_KEY` (optional)
+- `VLM_MODEL_NAME` / `OPENAI_MODEL` (default `gpt-4.1-mini`)
 
 ### Production
 ```bash
