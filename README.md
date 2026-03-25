@@ -61,12 +61,13 @@ Host-network development compose is the only supported dev setup.
 
 - Backend: `http://localhost:8000`
 - Frontend: `http://localhost:3000`
-- Dummy runner: included automatically as `dummy-runner` service
+- Dummy runner: included automatically as `dummy-runner` service (`python -m runner.runner --workflow dummy`)
 
-The dummy runner polls `/api/worker/jobs/next`, waits 5 seconds per case, performs a simple image manipulation, and submits the result back to `/api/worker/jobs/{case_id}/results`.
+The runner package lives in `./runner` and can be installed independently (for example on a GPU machine) with `pip install ./runner`. It exposes `tbk-runner --workflow dummy`.
+
+The dummy workflow polls `/api/worker/jobs/next`, waits 5 seconds per case, performs a simple image manipulation, and submits the result back to `/api/worker/jobs/{case_id}/results`.
 
 Optional runner env vars:
-- `RUNNER_PROCESS_SECONDS` (default `5`)
 - `RUNNER_POLL_SECONDS` (default `2`)
 - `RUNNER_HTTP_TIMEOUT_SECONDS` (default `30`)
 

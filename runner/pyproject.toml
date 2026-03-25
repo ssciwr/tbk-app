@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tbk-runner"
+version = "0.1.0"
+description = "Polling worker runner for Teddy backend workflows"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1.7,<9",
+    "requests>=2.32.0,<3",
+    "Pillow>=11.3.0,<12",
+]
+
+[project.scripts]
+tbk-runner = "runner.runner:cli"
+
+[tool.setuptools]
+packages = ["runner"]
+
+[tool.setuptools.package-dir]
+runner = "."

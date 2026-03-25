@@ -43,11 +43,10 @@ services:
     environment:
       - BACKEND_URL=http://127.0.0.1:8000
       - RUNNER_POLL_SECONDS=2
-      - RUNNER_PROCESS_SECONDS=5
     volumes:
       - .:/workspace
     working_dir: /workspace
-    command: ["python", "runner/dummy_runner.py"]
+    command: ["python", "-m", "runner.runner", "--workflow", "dummy"]
     depends_on:
       - backend
     network_mode: host
