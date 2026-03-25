@@ -564,4 +564,4 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
                 num_inference_steps=SDXL_NUM_INFERENCE_STEPS,
                 generator=generator,
             ).images[0]
-            yield sdxl_result
+            yield sdxl_result.convert("L").convert("RGB")
