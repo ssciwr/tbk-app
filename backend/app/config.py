@@ -8,8 +8,6 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-GenerationModel = Literal["FLUX_Kontext", "IP_Adapter_SDXL", "ChromaV44"]
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -27,9 +25,6 @@ class Settings(BaseSettings):
     CAROUSEL_SIZE: int = 10
     CAROUSEL_AUTOPLAY_SECONDS: int = 5
     FRACTURE_EDITOR_ENABLED: bool = True
-    GENERATION_MODELS: Annotated[list[GenerationModel], NoDecode] = Field(
-        default_factory=lambda: ["FLUX_Kontext", "IP_Adapter_SDXL", "ChromaV44"]
-    )
 
     STORAGE_PROVIDER: Literal["local", "seafile"] = "local"
 
@@ -66,35 +61,6 @@ class Settings(BaseSettings):
                     pass
             return [item.strip() for item in stripped.split(",") if item.strip()]
         return value
-
-    @field_validator("GENERATION_MODELS", mode="before")
-    @classmethod
-    def _parse_generation_models(cls, value: list[str] | str) -> list[str]:
-        if isinstance(value, list):
-            parsed = [str(item).strip() for item in value if str(item).strip()]
-        elif isinstance(value, str):
-            stripped = value.strip()
-            if not stripped:
-                parsed = []
-            elif stripped.startswith("["):
-                try:
-                    decoded = json.loads(stripped)
-                    if isinstance(decoded, list):
-                        parsed = [
-                            str(item).strip() for item in decoded if str(item).strip()
-                        ]
-                    else:
-                        parsed = []
-                except json.JSONDecodeError:
-                    parsed = []
-            else:
-                parsed = [item.strip() for item in stripped.split(",") if item.strip()]
-        else:
-            return value
-
-        if not parsed:
-            raise ValueError("GENERATION_MODELS must contain at least one model")
-        return parsed
 
 
 @lru_cache(maxsize=1)

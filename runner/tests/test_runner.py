@@ -182,7 +182,6 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
         status_code=200,
         headers={
             "X-Case-Id": "42",
-            "X-Workflow": "dummy",
             "X-Requested-Images": "3",
             "X-Workflow-Parameters": '{"strength": 0.7}',
         },
@@ -197,7 +196,6 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
     assert job is not None
     assert job.case_id == 42
     assert job.image_bytes == image_bytes
-    assert job.requested_workflow == "dummy"
     assert job.requested_images == 3
     assert job.parameters == {"strength": 0.7}
 
@@ -301,7 +299,6 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
                 return runner_module.Job(
                     case_id=7,
                     image_bytes=source_image,
-                    requested_workflow="dummy",
                     requested_images=3,
                     parameters={"alpha": 0.3},
                 )
@@ -380,7 +377,6 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
                 return runner_module.Job(
                     case_id=7,
                     image_bytes=source_image,
-                    requested_workflow="dummy",
                     requested_images=3,
                     parameters={},
                 )

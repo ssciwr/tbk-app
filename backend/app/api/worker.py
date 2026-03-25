@@ -33,7 +33,6 @@ async def worker_next_job(
     response.headers["X-Case-Id"] = str(case.case_id)
     response.headers["X-Child-Name"] = case.metadata.child_name
     response.headers["X-Animal-Name"] = case.metadata.animal_name
-    response.headers["X-Workflow"] = case.generation_model
     response.headers["X-Requested-Images"] = str(case.expected_results)
     response.headers["X-Expected-Results"] = str(case.expected_results)
     apply_no_cache_headers(response)

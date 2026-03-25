@@ -10,14 +10,10 @@ export const authToken = writable<string | null>(initialToken);
 
 export type AppConfig = {
   fracture_editor_enabled: boolean;
-  generation_model: string;
-  generation_models: string[];
 };
 
 const defaultAppConfig: AppConfig = {
-  fracture_editor_enabled: true,
-  generation_model: 'FLUX_Kontext',
-  generation_models: ['FLUX_Kontext', 'IP_Adapter_SDXL', 'ChromaV44']
+  fracture_editor_enabled: true
 };
 
 let cachedAppConfig: AppConfig = { ...defaultAppConfig };

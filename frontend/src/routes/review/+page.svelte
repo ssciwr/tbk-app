@@ -14,8 +14,6 @@
       animal_name: string;
       broken_bone: boolean;
     };
-    used_model: string;
-    available_models: string[];
     original_url: string;
     result_urls: string[];
     results_per_image: number;
@@ -32,7 +30,6 @@
   let actionMessage = '';
   let pollHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
-  let retryModelByCase: Record<number, string> = {};
 
   function revokeObjectUrls(urls: string[]): void {
     for (const url of urls) {
@@ -91,49 +88,20 @@
     const hydratedCases = await Promise.all(
       data.cases.map((pending) => hydrateCaseImages(pending, nextObjectUrls))
     );
-    const previousRetryModelByCase = retryModelByCase;
-    const nextRetryModelByCase: Record<number, string> = {};
-    for (const pending of hydratedCases) {
-      const previous = previousRetryModelByCase[pending.case_id];
-      const fallback = pending.available_models[0] ?? pending.used_model;
-      nextRetryModelByCase[pending.case_id] =
-        previous && pending.available_models.includes(previous) ? previous : fallback;
-    }
     const previousObjectUrls = activeObjectUrls;
     activeObjectUrls = nextObjectUrls;
     revokeObjectUrls(previousObjectUrls);
-    retryModelByCase = nextRetryModelByCase;
     cases = hydratedCases;
     loading = false;
-  }
-
-  function selectedRetryModel(pending: PendingCase): string {
-    const selected = retryModelByCase[pending.case_id];
-    if (selected && pending.available_models.includes(selected)) {
-      return selected;
-    }
-    return pending.available_models[0] ?? pending.used_model;
-  }
-
-  function setRetryModel(caseId: number, model: string): void {
-    retryModelByCase = { ...retryModelByCase, [caseId]: model };
   }
 
   async function decide(
     caseId: number,
     action: 'confirm' | 'retry' | 'cancel',
-    choiceIndex: number | null,
-    generationModel: string | null = null
+    choiceIndex: number | null
   ): Promise<void> {
     actionMessage = '';
-    const requestPayload: {
-      action: 'confirm' | 'retry' | 'cancel';
-      choice_index: number | null;
-      generation_model?: string;
-    } = { action, choice_index: choiceIndex };
-    if (action === 'retry' && generationModel) {
-      requestPayload.generation_model = generationModel;
-    }
+    const requestPayload = { action, choice_index: choiceIndex };
 
     const response = await authedFetch(`/api/review/${caseId}/decision`, {
       method: 'POST',
@@ -210,19 +178,6 @@
                 <h2>Case #{pending.case_id}</h2>
                 <p class="meta-line">Child: {pending.metadata.child_name}</p>
                 <p class="meta-line">Animal: {pending.metadata.animal_name}</p>
-                <p class="meta-line model-line">Used model: {pending.used_model}</p>
-                <label class="model-select">
-                  Retry with model
-                  <select
-                    value={selectedRetryModel(pending)}
-                    on:change={(event) =>
-                      setRetryModel(pending.case_id, (event.currentTarget as HTMLSelectElement).value)}
-                  >
-                    {#each pending.available_models as model}
-                      <option value={model}>{model}</option>
-                    {/each}
-                  </select>
-                </label>
                 {#if !pending.ready_for_review}
                   <p class="generation-note">
                     Image currently generating ({pending.received_results}/{pending.results_per_image})
@@ -231,8 +186,7 @@
                 <div class="meta-actions">
                   <button
                     class="secondary"
-                    on:click={() =>
-                      decide(pending.case_id, 'retry', null, selectedRetryModel(pending))}
+                    on:click={() => decide(pending.case_id, 'retry', null)}
                   >
                     Retry generation
                   </button>
@@ -312,25 +266,6 @@
     font-size: 1.8rem;
     line-height: 1.05;
     font-weight: 700;
-  }
-
-  .meta-line.model-line {
-    font-size: 1rem;
-    line-height: 1.2;
-    font-weight: 600;
-    color: #374651;
-  }
-
-  .model-select {
-    display: grid;
-    gap: 0.35rem;
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: #31424d;
-  }
-
-  .model-select select {
-    max-width: 100%;
   }
 
   .generation-note {

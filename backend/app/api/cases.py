@@ -30,7 +30,6 @@ async def create_case(
         owner_ref=qr_content.strip(),
         metadata=metadata,
         broken_bone=broken_bone,
-        generation_model=services.settings.GENERATION_MODELS[0],
     )
 
     return {

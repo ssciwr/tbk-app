@@ -95,7 +95,6 @@ async def test_case_upload_and_queue_insertion(
     assert next_job.headers["content-type"].startswith("image/png")
     assert int(next_job.headers["X-Case-Id"]) == case_id
     assert next_job.headers["X-Child-Name"] == "Ada"
-    assert next_job.headers["X-Workflow"] == settings.GENERATION_MODELS[0]
     assert int(next_job.headers["X-Requested-Images"]) == settings.RESULTS_PER_IMAGE
     assert "X-Last-Name" not in next_job.headers
 
@@ -190,7 +189,7 @@ async def test_worker_failed_job_requeues_collecting_case(
 
 
 @pytest.mark.anyio
-async def test_review_retry_switches_case_workflow_model(
+async def test_review_retry_requeues_case(
     client: AsyncClient,
     auth_headers: dict[str, str],
     png_bytes: bytes,
@@ -212,21 +211,16 @@ async def test_review_retry_switches_case_workflow_model(
     assert pending.status_code == 200
     pending_cases = pending.json()["cases"]
     assert pending_cases and pending_cases[0]["case_id"] == case_id
-    assert pending_cases[0]["used_model"] == "FLUX_Kontext"
-    assert pending_cases[0]["available_models"] == [
-        "FLUX_Kontext",
-        "IP_Adapter_SDXL",
-        "ChromaV44",
-    ]
+    assert "used_model" not in pending_cases[0]
+    assert "available_models" not in pending_cases[0]
 
     retry = await client.post(
         f"/api/review/{case_id}/decision",
         headers=auth_headers,
-        json={"action": "retry", "choice_index": None, "generation_model": "ChromaV44"},
+        json={"action": "retry", "choice_index": None},
     )
     assert retry.status_code == 200
 
     next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert next_job.status_code == 200
     assert int(next_job.headers["X-Case-Id"]) == case_id
-    assert next_job.headers["X-Workflow"] == "ChromaV44"

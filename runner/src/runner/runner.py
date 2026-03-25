@@ -21,7 +21,6 @@ from .core import WorkflowBase, create_workflow, list_workflows
 class Job:
     case_id: int
     image_bytes: bytes
-    requested_workflow: str | None
     requested_images: int
     parameters: dict[str, Any]
 
@@ -166,7 +165,6 @@ class BackendClient:
         return Job(
             case_id=int(case_id_header),
             image_bytes=response.content,
-            requested_workflow=response.headers.get("X-Workflow"),
             requested_images=self._parse_requested_images(response),
             parameters=self._parse_parameters(response),
         )
@@ -247,26 +245,11 @@ def run_runner(
                 time.sleep(poll_seconds)
                 continue
 
-            if (
-                job.requested_workflow
-                and job.requested_workflow.lower() != workflow.name
-            ):
-                logging.info(
-                    (
-                        "Received case %s with backend workflow=%s; processing with %s "
-                        "for %s requested image(s)."
-                    ),
-                    job.case_id,
-                    job.requested_workflow,
-                    workflow.name,
-                    job.requested_images,
-                )
-            else:
-                logging.info(
-                    "Processing case %s with %s requested image(s).",
-                    job.case_id,
-                    job.requested_images,
-                )
+            logging.info(
+                "Processing case %s with %s requested image(s).",
+                job.case_id,
+                job.requested_images,
+            )
 
             with Image.open(io.BytesIO(job.image_bytes)) as source_image:
                 source_image.load()
