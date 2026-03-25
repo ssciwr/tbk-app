@@ -1,4 +1,6 @@
-diffusers>=0.34.0
-openai>=1.0.0
-rembg>=2.0.0
-torch>=2.0.0
+diffusers
+openai
+peft
+rembg[gpu]
+torch
+transformers
