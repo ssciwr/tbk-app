@@ -85,20 +85,13 @@ class CaseQueue:
                 case = self._cases.get(case_id)
                 if case is None:
                     continue
-                if case.state not in {
-                    CaseState.QUEUED,
-                    CaseState.COLLECTING_RESULTS,
-                    CaseState.RETRIED,
-                }:
+                if case.state not in {CaseState.QUEUED, CaseState.RETRIED}:
                     continue
                 if case.original_bytes is None:
                     continue
 
                 case.state = CaseState.COLLECTING_RESULTS
                 case.dispatches += 1
-
-                if case.dispatches < case.expected_results:
-                    self._dispatch_queue.append(case_id)
 
                 return case
 
@@ -283,8 +276,13 @@ class CaseQueue:
             case = self._cases.get(case_id)
             if case is None:
                 raise KeyError("Case not found")
-            if case.state != CaseState.AWAITING_REVIEW:
-                raise ValueError("Case is not pending review")
+            if case.state not in {
+                CaseState.QUEUED,
+                CaseState.COLLECTING_RESULTS,
+                CaseState.RETRIED,
+                CaseState.AWAITING_REVIEW,
+            }:
+                raise ValueError("Case cannot be retried in its current state")
 
             case.results.clear()
             case.selected_result_bytes = None
@@ -294,6 +292,7 @@ class CaseQueue:
             )
             case.state = CaseState.RETRIED
             self._awaiting_review.discard(case_id)
+            self._drop_from_dispatch_queue(case_id)
             self._dispatch_queue.append(case_id)
 
     def cancel_case(self, case_id: int) -> None:

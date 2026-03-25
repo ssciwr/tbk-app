@@ -30,10 +30,10 @@ async def _create_case_pending_fracture(
     )
     assert uploaded.status_code == 200
 
-    assert (
-        await client.get("/api/worker/jobs/next", headers=auth_headers)
-    ).status_code == 200
-    for _ in range(3):
+    dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert dispatched.status_code == 200
+    requested_images = int(dispatched.headers["X-Requested-Images"])
+    for _ in range(requested_images):
         submitted = await client.post(
             f"/api/worker/jobs/{case_id}/results",
             headers=auth_headers,

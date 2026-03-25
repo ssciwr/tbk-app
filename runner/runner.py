@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import io
 import json
 import logging
@@ -21,6 +22,7 @@ class Job:
     case_id: int
     image_bytes: bytes
     requested_workflow: str | None
+    requested_images: int
     parameters: dict[str, Any]
 
 
@@ -96,6 +98,23 @@ class BackendClient:
             return {}
         return parsed
 
+    @staticmethod
+    def _parse_requested_images(response: requests.Response) -> int:
+        raw_requested_images = (
+            response.headers.get("X-Requested-Images")
+            or response.headers.get("X-Expected-Results")
+            or "1"
+        )
+        try:
+            requested_images = int(raw_requested_images)
+        except ValueError:
+            logging.warning(
+                "Invalid requested image count '%s'; falling back to 1.",
+                raw_requested_images,
+            )
+            return 1
+        return max(requested_images, 1)
+
     def next_job(self) -> Job | None:
         response = self._request_with_auth("GET", "/api/worker/jobs/next")
         if response.status_code == 204:
@@ -110,6 +129,7 @@ class BackendClient:
             case_id=int(case_id_header),
             image_bytes=response.content,
             requested_workflow=response.headers.get("X-Workflow"),
+            requested_images=self._parse_requested_images(response),
             parameters=self._parse_parameters(response),
         )
 
@@ -173,30 +193,60 @@ def run_runner(*, workflow_name: str, server: str, password: str) -> None:
                 and job.requested_workflow.lower() != workflow.name
             ):
                 logging.info(
-                    "Received case %s with backend workflow=%s; processing with %s.",
+                    (
+                        "Received case %s with backend workflow=%s; processing with %s "
+                        "for %s requested image(s)."
+                    ),
                     job.case_id,
                     job.requested_workflow,
                     workflow.name,
+                    job.requested_images,
                 )
             else:
-                logging.info("Processing case %s.", job.case_id)
+                logging.info(
+                    "Processing case %s with %s requested image(s).",
+                    job.case_id,
+                    job.requested_images,
+                )
 
             with Image.open(io.BytesIO(job.image_bytes)) as source_image:
                 source_image.load()
-                image = workflow.generate(
+                generated_images = workflow.generate(
                     source_image.copy(),
                     _validate_parameters(workflow, job.parameters),
+                    job.requested_images,
                 )
-            result = _image_to_png_bytes(image)
-            submission = client.submit_result(job.case_id, result)
+            if not isinstance(generated_images, Iterable):
+                raise RuntimeError(
+                    (
+                        f"Workflow '{workflow.name}' returned a non-iterable from "
+                        "generate()."
+                    )
+                )
 
-            logging.info(
-                "Submitted result for case %s (%s/%s, ready_for_review=%s).",
-                job.case_id,
-                submission.get("received_results"),
-                submission.get("expected_results"),
-                submission.get("ready_for_review"),
-            )
+            submitted_count = 0
+            for submitted_count, image in enumerate(generated_images, start=1):
+                result = _image_to_png_bytes(image)
+                submission = client.submit_result(job.case_id, result)
+                logging.info(
+                    (
+                        "Submitted result %s for case %s (%s/%s, "
+                        "ready_for_review=%s)."
+                    ),
+                    submitted_count,
+                    job.case_id,
+                    submission.get("received_results"),
+                    submission.get("expected_results"),
+                    submission.get("ready_for_review"),
+                )
+
+            if submitted_count == 0:
+                raise RuntimeError(
+                    (
+                        f"Workflow '{workflow.name}' yielded no images for case "
+                        f"{job.case_id}."
+                    )
+                )
         except KeyboardInterrupt:
             raise
         except Exception:

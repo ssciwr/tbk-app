@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -38,10 +39,14 @@ class WorkflowBase:
         }
 
     def generate(
-        self, img: Image.Image, parameters: dict[str, Any] | None = None
-    ) -> Image.Image:
-        """Generate an X-Ray for the input."""
-        return img
+        self,
+        img: Image.Image,
+        parameters: dict[str, Any] | None = None,
+        num_images: int = 1,
+    ) -> Generator[Image.Image, None, None]:
+        """Generate one or more X-Ray images for the input."""
+        for _ in range(max(num_images, 0)):
+            yield img.copy()
 
 
 def list_workflows() -> list[str]:

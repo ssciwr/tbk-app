@@ -96,6 +96,7 @@ async def test_case_upload_and_queue_insertion(
     assert int(next_job.headers["X-Case-Id"]) == case_id
     assert next_job.headers["X-Child-Name"] == "Ada"
     assert next_job.headers["X-Workflow"] == settings.GENERATION_MODELS[0]
+    assert int(next_job.headers["X-Requested-Images"]) == settings.RESULTS_PER_IMAGE
     assert "X-Last-Name" not in next_job.headers
 
 
@@ -104,13 +105,13 @@ async def test_worker_next_job_and_204_behavior(
     client: AsyncClient,
     auth_headers: dict[str, str],
     png_bytes: bytes,
+    settings,
 ) -> None:
     await _upload_case(client, auth_headers, png_bytes)
 
-    # RESULTS_PER_IMAGE is 3 in test settings, so we expect 3 dispatches then empty.
-    for _ in range(3):
-        response = await client.get("/api/worker/jobs/next", headers=auth_headers)
-        assert response.status_code == 200
+    response = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert response.status_code == 200
+    assert int(response.headers["X-Requested-Images"]) == settings.RESULTS_PER_IMAGE
 
     empty = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert empty.status_code == 204
@@ -124,11 +125,11 @@ async def test_worker_result_submission_until_review_ready(
 ) -> None:
     case_id = await _upload_case(client, auth_headers, png_bytes)
     # Dispatch at least once to move state out of queued.
-    assert (
-        await client.get("/api/worker/jobs/next", headers=auth_headers)
-    ).status_code == 200
+    dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert dispatched.status_code == 200
+    requested_images = int(dispatched.headers["X-Requested-Images"])
 
-    for index in range(3):
+    for index in range(requested_images):
         result = await client.post(
             f"/api/worker/jobs/{case_id}/results",
             headers=auth_headers,
@@ -140,7 +141,7 @@ async def test_worker_result_submission_until_review_ready(
         payload = result.json()
         assert payload["status"] == "accepted"
         assert payload["received_results"] == index + 1
-        assert payload["expected_results"] == 3
+        assert payload["expected_results"] == requested_images
 
     assert payload["ready_for_review"] is True
 
@@ -158,11 +159,11 @@ async def test_review_retry_switches_case_workflow_model(
     png_bytes: bytes,
 ) -> None:
     case_id = await _upload_case(client, auth_headers, png_bytes)
-    assert (
-        await client.get("/api/worker/jobs/next", headers=auth_headers)
-    ).status_code == 200
+    dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert dispatched.status_code == 200
+    requested_images = int(dispatched.headers["X-Requested-Images"])
 
-    for _ in range(3):
+    for _ in range(requested_images):
         submitted = await client.post(
             f"/api/worker/jobs/{case_id}/results",
             headers=auth_headers,
