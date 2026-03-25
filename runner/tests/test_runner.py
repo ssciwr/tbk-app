@@ -98,6 +98,53 @@ def test_chroma_setup_requires_dependency_file_when_imports_fail(monkeypatch) ->
         workflow.setup()
 
 
+def test_chroma_resolve_workflow_file_uses_runner_assets_for_bare_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chroma_module = runner_module.chroma
+    assets_dir = tmp_path / "runner" / "assets"
+    assets_dir.mkdir(parents=True)
+    expected = (assets_dir / "monochrome_background.png").resolve()
+    expected.write_bytes(b"asset")
+
+    monkeypatch.chdir(tmp_path)
+
+    resolved = chroma_module._resolve_workflow_file(
+        "monochrome_background.png",
+        description="monochrome background",
+    )
+
+    assert Path(resolved) == expected
+
+
+def test_chroma_resolve_workflow_file_accepts_explicit_absolute_path(
+    tmp_path: Path,
+) -> None:
+    chroma_module = runner_module.chroma
+    overridden = (tmp_path / "custom-transformer.safetensors").resolve()
+    overridden.write_bytes(b"transformer")
+
+    resolved = chroma_module._resolve_workflow_file(
+        str(overridden),
+        description="chroma transformer",
+    )
+
+    assert Path(resolved) == overridden
+
+
+def test_chroma_resolve_workflow_file_has_clear_missing_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="runner/assets"):
+        chroma_module._resolve_workflow_file(
+            "missing-lora.safetensors",
+            description="chroma LoRA",
+        )
+
+
 def test_dummy_workflow_generate_yields_seed_varied_images(monkeypatch) -> None:
     monkeypatch.setattr(dummy_module, "RUNNER_PROCESS_SECONDS", 0.0)
     workflow = dummy_module.DummyWorkflow()

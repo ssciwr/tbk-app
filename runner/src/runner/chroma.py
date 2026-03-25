@@ -97,6 +97,63 @@ def _require_chroma_dependencies() -> None:
         ) from _CHROMA_IMPORT_ERROR
 
 
+def _candidate_asset_dirs() -> list[Path]:
+    candidates = [
+        (Path(__file__).resolve().parents[2] / "assets").resolve(),
+        (Path.cwd() / "runner" / "assets").resolve(),
+        (Path.cwd() / "assets").resolve(),
+    ]
+    unique: list[Path] = []
+    for path in candidates:
+        if path not in unique:
+            unique.append(path)
+    return unique
+
+
+def _resolve_workflow_file(
+    raw_value: str,
+    *,
+    description: str,
+) -> str:
+    normalized = raw_value.strip()
+    if not normalized:
+        raise ValueError(f"Missing {description} file reference.")
+
+    if normalized.startswith(("http://", "https://")):
+        return normalized
+
+    path_value = Path(normalized).expanduser()
+    has_path_hint = (
+        path_value.is_absolute()
+        or normalized.startswith(".")
+        or "/" in normalized
+        or "\\" in normalized
+    )
+
+    if has_path_hint:
+        resolved = (
+            path_value.resolve()
+            if path_value.is_absolute()
+            else (Path.cwd() / path_value).resolve()
+        )
+        if not resolved.exists():
+            raise FileNotFoundError(f"Missing {description} file at '{resolved}'.")
+        return str(resolved)
+
+    search_paths = [
+        (assets_dir / path_value).resolve() for assets_dir in _candidate_asset_dirs()
+    ]
+    for candidate in search_paths:
+        if candidate.exists():
+            return str(candidate)
+
+    searched = ", ".join(str(path) for path in search_paths)
+    raise FileNotFoundError(
+        f"Missing {description} file '{normalized}'. Looked in: {searched}. "
+        "Place bare filenames in ./runner/assets."
+    )
+
+
 def pick_device_dtype(device_arg: str, dtype_arg: str) -> tuple[str, Any]:
     _require_chroma_dependencies()
     assert torch is not None
@@ -167,7 +224,11 @@ def remove_background_second_pass(image: Image.Image, session: Any) -> Image.Ima
 
 
 def add_monochrome_background(image: Image.Image) -> Image.Image:
-    background = Image.open(MONOCHROME_BACKGROUND_PATH).convert("RGB")
+    background_path = _resolve_workflow_file(
+        MONOCHROME_BACKGROUND_PATH,
+        description="monochrome background",
+    )
+    background = Image.open(background_path).convert("RGB")
     if background.size != image.size:
         background = background.resize(image.size, Image.Resampling.NEAREST)
     return Image.alpha_composite(
@@ -181,8 +242,16 @@ def load_pipeline(dtype: Any) -> Any:
     assert ChromaTransformer2DModel is not None
     assert ChromaImg2ImgPipeline is not None
 
-    transformer = ChromaTransformer2DModel.from_single_file(
+    transformer_path = _resolve_workflow_file(
         TRANSFORMER_PATH,
+        description="chroma transformer",
+    )
+    lora_reference = _resolve_workflow_file(
+        LORA_PATH,
+        description="chroma LoRA",
+    )
+    transformer = ChromaTransformer2DModel.from_single_file(
+        transformer_path,
         torch_dtype=dtype,
     )
     pipe = ChromaImg2ImgPipeline.from_pretrained(
@@ -190,7 +259,11 @@ def load_pipeline(dtype: Any) -> Any:
         torch_dtype=dtype,
         transformer=transformer,
     )
-    pipe.load_lora_weights(LORA_PATH)
+    lora_path = Path(lora_reference)
+    if lora_path.is_file():
+        pipe.load_lora_weights(str(lora_path.parent), weight_name=lora_path.name)
+    else:
+        pipe.load_lora_weights(lora_reference)
     pipe.fuse_lora(lora_scale=LORA_SCALE)
     return pipe
 
@@ -204,11 +277,15 @@ def load_sdxl_style_pipeline(dtype: Any, device: str) -> Any:
         torch_dtype=dtype,
     )
 
-    lora_path = Path(SDXL_LORA_PATH)
+    sdxl_lora_reference = _resolve_workflow_file(
+        SDXL_LORA_PATH,
+        description="SDXL LoRA",
+    )
+    lora_path = Path(sdxl_lora_reference)
     if lora_path.is_file():
         pipe.load_lora_weights(str(lora_path.parent), weight_name=lora_path.name)
     else:
-        pipe.load_lora_weights(SDXL_LORA_PATH)
+        pipe.load_lora_weights(sdxl_lora_reference)
 
     pipe.fuse_lora(lora_scale=SDXL_LORA_SCALE)
     pipe.to(device)
