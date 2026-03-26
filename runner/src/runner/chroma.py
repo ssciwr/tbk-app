@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 import base64
+from datetime import datetime
 import io
 import json
 import logging
@@ -86,6 +87,7 @@ SDXL_STRENGTH = 0.4
 SDXL_GUIDANCE_SCALE = 5.0
 SDXL_NUM_INFERENCE_STEPS = 15
 SDXL_PROMPT = "xray"
+DEBUG_OUTPUT_DIR_NAME = "debug-output"
 
 
 def _require_chroma_dependencies() -> None:
@@ -335,6 +337,31 @@ def normalize_vlm_base_url(base_url: str) -> str:
     return f"{normalized}/v1"
 
 
+def _create_debug_output_dir() -> Path:
+    root = (Path.cwd() / DEBUG_OUTPUT_DIR_NAME).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    debug_dir = root / timestamp
+    debug_dir.mkdir(parents=False, exist_ok=False)
+    return debug_dir
+
+
+def _write_debug_prompt(debug_dir: Path | None, prompt: str) -> None:
+    if debug_dir is None:
+        return
+    (debug_dir / "vlm_prompt.txt").write_text(prompt, encoding="utf-8")
+
+
+def _write_debug_image(
+    debug_dir: Path | None,
+    filename: str,
+    image: Image.Image,
+) -> None:
+    if debug_dir is None:
+        return
+    image.save(debug_dir / filename, format="PNG")
+
+
 def generate_prompt_with_openai_compatible(
     image: Image.Image,
     instruction: str,
@@ -497,6 +524,7 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         img: Image.Image,
         parameters: dict[str, Any] | None = None,
         num_images: int = 1,
+        debug: bool = False,
     ) -> Generator[Image.Image, None, None]:
         del parameters
         self._assert_ready()
@@ -505,17 +533,33 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         assert self._first_pass_session is not None
         assert self._second_pass_session is not None
 
+        debug_dir: Path | None = None
+        if debug:
+            debug_dir = _create_debug_output_dir()
+            print(f"Debug output directory: {debug_dir}", flush=True)
+
         resized_input = img.convert("RGB").resize(
             (IMAGE_WIDTH, IMAGE_HEIGHT),
             Image.Resampling.NEAREST,
         )
+        _write_debug_image(debug_dir, "01_resized_input.png", resized_input)
         first_rembg_image = remove_background_first_pass(
             resized_input,
             session=self._first_pass_session,
         )
+        _write_debug_image(
+            debug_dir,
+            "02_first_pass_no_background.png",
+            first_rembg_image,
+        )
         second_rembg_image = remove_background_second_pass(
             first_rembg_image,
             session=self._second_pass_session,
+        )
+        _write_debug_image(
+            debug_dir,
+            "03_second_pass_no_background.png",
+            second_rembg_image,
         )
 
         normalized_vlm_server = normalize_vlm_base_url(self.vlm_server)
@@ -540,9 +584,11 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         )
         logging.info("VLM prompt generation completed.")
         logging.debug("VLM generated prompt: %s", final_prompt)
+        _write_debug_prompt(debug_dir, final_prompt)
 
         init_image = add_monochrome_background(second_rembg_image)
-        for _ in range(max(num_images, 0)):
+        _write_debug_image(debug_dir, "04_monochrome_init_image.png", init_image)
+        for index in range(max(num_images, 0)):
             generator = self._new_generator()
             generated = self._pipe(
                 prompt=final_prompt,
@@ -555,6 +601,11 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
                 strength=IMG2IMG_DENOISE_STRENGTH,
                 generator=generator,
             ).images[0]
+            _write_debug_image(
+                debug_dir,
+                f"05_chroma_generated_{index + 1:02d}.png",
+                generated,
+            )
 
             sdxl_result = self._sdxl_pipe(
                 prompt=SDXL_PROMPT,
@@ -564,4 +615,15 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
                 num_inference_steps=SDXL_NUM_INFERENCE_STEPS,
                 generator=generator,
             ).images[0]
-            yield sdxl_result.convert("L").convert("RGB")
+            _write_debug_image(
+                debug_dir,
+                f"06_sdxl_rewrite_{index + 1:02d}.png",
+                sdxl_result,
+            )
+            final_image = sdxl_result.convert("L").convert("RGB")
+            _write_debug_image(
+                debug_dir,
+                f"07_final_output_{index + 1:02d}.png",
+                final_image,
+            )
+            yield final_image

@@ -26,7 +26,9 @@ class DummyWorkflow(WorkflowBase, name="dummy"):
         img: Image.Image,
         parameters: dict[str, Any] | None = None,
         num_images: int = 1,
+        debug: bool = False,
     ) -> Generator[Image.Image, None, None]:
+        del debug
         base = img.convert("RGB")
         for seed in range(max(num_images, 0)):
             time.sleep(max(RUNNER_PROCESS_SECONDS, 0.0))

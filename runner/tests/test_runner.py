@@ -145,6 +145,39 @@ def test_chroma_resolve_workflow_file_has_clear_missing_message(
         )
 
 
+def test_chroma_create_debug_output_dir_creates_unique_timestamp_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.chdir(tmp_path)
+
+    first_dir = chroma_module._create_debug_output_dir()
+    second_dir = chroma_module._create_debug_output_dir()
+
+    expected_root = (tmp_path / "debug-output").resolve()
+    assert first_dir.parent == expected_root
+    assert second_dir.parent == expected_root
+    assert first_dir != second_dir
+    assert first_dir.exists()
+    assert second_dir.exists()
+
+
+def test_chroma_debug_helpers_write_prompt_and_images(tmp_path: Path) -> None:
+    chroma_module = runner_module.chroma
+    debug_dir = tmp_path / "debug-output" / "run-1"
+    debug_dir.mkdir(parents=True)
+    source = Image.new("RGB", (8, 8), color=(12, 34, 56))
+
+    chroma_module._write_debug_prompt(debug_dir, "generated prompt text")
+    chroma_module._write_debug_image(debug_dir, "example.png", source)
+
+    assert (debug_dir / "vlm_prompt.txt").read_text(encoding="utf-8") == (
+        "generated prompt text"
+    )
+    with Image.open(debug_dir / "example.png") as saved:
+        assert saved.size == (8, 8)
+
+
 def test_dummy_workflow_generate_yields_seed_varied_images(monkeypatch) -> None:
     monkeypatch.setattr(dummy_module, "RUNNER_PROCESS_SECONDS", 0.0)
     workflow = dummy_module.DummyWorkflow()
@@ -262,7 +295,7 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
 
         def __init__(self) -> None:
             self.setup_called = False
-            self.generate_calls: list[tuple[dict[str, Any], int]] = []
+            self.generate_calls: list[tuple[dict[str, Any], int, bool]] = []
 
         def is_available(self) -> bool:
             return True
@@ -278,8 +311,9 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
             img: Image.Image,
             parameters: dict[str, Any] | None = None,
             num_images: int = 1,
+            debug: bool = False,
         ):
-            self.generate_calls.append((parameters or {}, num_images))
+            self.generate_calls.append((parameters or {}, num_images, debug))
             for index in range(num_images):
                 yield Image.new("RGB", img.size, color=(index, 0, 0))
 
@@ -325,7 +359,7 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
         )
 
     assert workflow.setup_called is True
-    assert workflow.generate_calls == [({"alpha": 0.3}, 3)]
+    assert workflow.generate_calls == [({"alpha": 0.3}, 3, False)]
     assert len(FakeBackendClient.instances) == 1
     fake_client = FakeBackendClient.instances[0]
     assert fake_client.server == "http://backend:8000"
@@ -356,7 +390,9 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
             img: Image.Image,
             _parameters: dict[str, Any] | None = None,
             _num_images: int = 1,
+            debug: bool = False,
         ):
+            del debug
             yield Image.new("RGB", img.size, color=(1, 2, 3))
             raise RuntimeError("third image generation failed")
 
@@ -412,6 +448,74 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
     assert fake_client.reported_failures == [7]
 
 
+def test_run_runner_passes_debug_flag_into_generate(monkeypatch) -> None:
+    source_image = _png_bytes()
+
+    class FakeWorkflow:
+        name = "dummy"
+
+        def __init__(self) -> None:
+            self.debug_calls: list[bool] = []
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            return None
+
+        def parameter_schema(self) -> dict[str, Any]:
+            return {"type": "object"}
+
+        def generate(
+            self,
+            img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            _num_images: int = 1,
+            debug: bool = False,
+        ):
+            self.debug_calls.append(debug)
+            yield Image.new("RGB", img.size, color=(4, 5, 6))
+
+    class FakeBackendClient:
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+            self._next_calls = 0
+
+        def next_job(self) -> runner_module.Job | None:
+            self._next_calls += 1
+            if self._next_calls == 1:
+                return runner_module.Job(
+                    case_id=9,
+                    image_bytes=source_image,
+                    requested_images=1,
+                    parameters={},
+                )
+            raise KeyboardInterrupt
+
+        def submit_result(self, _case_id: int, _image_bytes: bytes) -> dict[str, Any]:
+            return {
+                "status": "accepted",
+                "received_results": 1,
+                "expected_results": 1,
+                "ready_for_review": True,
+            }
+
+    workflow = FakeWorkflow()
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: workflow)
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+            debug=True,
+        )
+
+    assert workflow.debug_calls == [True]
+
+
 def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:
     class FakeWorkflow:
         name = "dummy"
@@ -434,7 +538,9 @@ def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:
             _img: Image.Image,
             _parameters: dict[str, Any] | None = None,
             _num_images: int = 1,
+            debug: bool = False,
         ):
+            del debug
             if False:
                 yield None
 

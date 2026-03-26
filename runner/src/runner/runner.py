@@ -211,6 +211,7 @@ def run_runner(
     workflow_name: str,
     server: str,
     password: str,
+    debug: bool = False,
     vlm_server: str | None = None,
     vlm_server_key: str | None = None,
     vlm_model_name: str | None = None,
@@ -257,6 +258,7 @@ def run_runner(
                     source_image.copy(),
                     _validate_parameters(workflow, job.parameters),
                     job.requested_images,
+                    debug=debug,
                 )
             if not isinstance(generated_images, Iterable):
                 raise RuntimeError(
@@ -342,6 +344,12 @@ def run_runner(
     help="Shared worker password used to obtain backend auth tokens.",
 )
 @click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Enable workflow debug mode (writes intermediate artifacts when supported).",
+)
+@click.option(
     "--vlm-server",
     help="VLM base URL.",
 )
@@ -357,6 +365,7 @@ def cli(
     workflow: str,
     server: str,
     password: str,
+    debug: bool,
     vlm_server: str | None,
     vlm_server_key: str | None,
     vlm_model_name: str | None,
@@ -369,6 +378,7 @@ def cli(
         workflow_name=workflow,
         server=server,
         password=password,
+        debug=debug,
         vlm_server=vlm_server,
         vlm_server_key=vlm_server_key,
         vlm_model_name=vlm_model_name,

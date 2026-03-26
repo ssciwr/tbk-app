@@ -47,8 +47,10 @@ class WorkflowBase:
         img: Image.Image,
         parameters: dict[str, Any] | None = None,
         num_images: int = 1,
+        debug: bool = False,
     ) -> Generator[Image.Image, None, None]:
         """Generate one or more X-Ray images for the input."""
+        del debug
         for _ in range(max(num_images, 0)):
             yield img.copy()
 
