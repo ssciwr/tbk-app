@@ -10,6 +10,8 @@ repos:
   - id: check-yaml      # Make sure that contained YAML files are well-formed
   - id: trailing-whitespace      # Trim trailing whitespace of all sorts
   - id: check-added-large-files      # Apply a file size limit of 500kB
+    args:
+      - --maxkb=2048
   - id: check-toml      # Simple parser validation of e.g. pyproject.toml
   - id: check-json      # Check validity of JSON files
   - id: pretty-format-json      # Format JSON files consistently
