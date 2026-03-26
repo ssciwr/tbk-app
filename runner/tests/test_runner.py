@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import io
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
+from click.testing import CliRunner
 import pytest
 from PIL import Image
 import requests
@@ -104,13 +106,13 @@ def test_chroma_resolve_workflow_file_uses_runner_assets_for_bare_name(
     chroma_module = runner_module.chroma
     assets_dir = tmp_path / "runner" / "assets"
     assets_dir.mkdir(parents=True)
-    expected = (assets_dir / "monochrome_background.png").resolve()
+    expected = (assets_dir / "unit-test-background.png").resolve()
     expected.write_bytes(b"asset")
 
     monkeypatch.chdir(tmp_path)
 
     resolved = chroma_module._resolve_workflow_file(
-        "monochrome_background.png",
+        "unit-test-background.png",
         description="monochrome background",
     )
 
@@ -215,6 +217,8 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
         status_code=200,
         headers={
             "X-Case-Id": "42",
+            "X-Child-Name": "Ada",
+            "X-Animal-Name": "Bunny",
             "X-Requested-Images": "3",
             "X-Workflow-Parameters": '{"strength": 0.7}',
         },
@@ -231,6 +235,68 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
     assert job.image_bytes == image_bytes
     assert job.requested_images == 3
     assert job.parameters == {"strength": 0.7}
+    assert job.animal_name == "Bunny"
+    assert job.child_name == "Ada"
+
+
+def test_scaled_watermark_text_slots_follow_hardcoded_template() -> None:
+    watermark = Image.new(
+        "RGBA",
+        (
+            runner_module.WATERMARK_TEMPLATE_WIDTH,
+            runner_module.WATERMARK_TEMPLATE_HEIGHT,
+        ),
+        (0, 0, 0, 0),
+    )
+
+    slots = runner_module._scaled_watermark_text_slots(watermark)
+
+    assert slots == list(runner_module.WATERMARK_TEXT_SLOTS)
+
+
+def test_find_blackest_corner_returns_darkest_region() -> None:
+    image = Image.new("RGB", (40, 40), color=(240, 240, 240))
+    for x in range(30, 40):
+        for y in range(30, 40):
+            image.putpixel((x, y), (0, 0, 0))
+
+    corner = runner_module._find_blackest_corner(
+        image,
+        region_width=10,
+        region_height=10,
+    )
+
+    assert corner == (30, 30)
+
+
+def test_apply_watermark_places_template_in_blackest_corner(monkeypatch) -> None:
+    source = Image.new("RGB", (60, 60), color=(255, 255, 255))
+    for x in range(0, 10):
+        for y in range(50, 60):
+            source.putpixel((x, y), (0, 0, 0))
+
+    watermark = Image.new("RGBA", (10, 10), color=(255, 0, 0, 255))
+    captured: dict[str, str] = {}
+
+    def fake_draw(
+        _watermark: Image.Image,
+        toy_animal_name: str,
+        child_name: str,
+        date_text: str,
+    ) -> None:
+        captured["toy_animal_name"] = toy_animal_name
+        captured["child_name"] = child_name
+        captured["date_text"] = date_text
+
+    monkeypatch.setattr(runner_module, "_load_watermark_template", lambda: watermark)
+    monkeypatch.setattr(runner_module, "_draw_watermark_text", fake_draw)
+
+    result = runner_module._apply_watermark(source, "Fox", "Lia")
+
+    assert captured["toy_animal_name"] == "Fox"
+    assert captured["child_name"] == "Lia"
+    assert re.fullmatch(r"\d{2}\.\d{2}\.\d{2}", captured["date_text"]) is not None
+    assert result.getpixel((5, 55)) == (255, 0, 0)
 
 
 def test_backend_client_next_job_returns_none_on_204(monkeypatch) -> None:
@@ -368,6 +434,86 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
     assert all(
         image_bytes.startswith(b"\x89PNG") for _, image_bytes in fake_client.submissions
     )
+
+
+def test_run_runner_skips_watermark_when_no_watermark_enabled(monkeypatch) -> None:
+    source_image = _png_bytes()
+
+    class FakeWorkflow:
+        name = "dummy"
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            return None
+
+        def parameter_schema(self) -> dict[str, Any]:
+            return {"type": "object"}
+
+        def generate(
+            self,
+            img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            _num_images: int = 1,
+            debug: bool = False,
+        ):
+            del debug
+            yield Image.new("RGB", img.size, color=(1, 2, 3))
+
+    class FakeBackendClient:
+        instances: list["FakeBackendClient"] = []
+
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+            self.submissions: list[tuple[int, bytes]] = []
+            self._next_calls = 0
+            FakeBackendClient.instances.append(self)
+
+        def next_job(self) -> runner_module.Job | None:
+            self._next_calls += 1
+            if self._next_calls == 1:
+                return runner_module.Job(
+                    case_id=5,
+                    image_bytes=source_image,
+                    requested_images=1,
+                    parameters={},
+                    animal_name="Fox",
+                    child_name="Ada",
+                )
+            raise KeyboardInterrupt
+
+        def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
+            self.submissions.append((case_id, image_bytes))
+            return {
+                "status": "accepted",
+                "received_results": 1,
+                "expected_results": 1,
+                "ready_for_review": True,
+            }
+
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> Image.Image:
+        raise AssertionError(
+            "_apply_watermark should not be called when no_watermark=True"
+        )
+
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: FakeWorkflow())
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+    monkeypatch.setattr(runner_module, "_apply_watermark", fail_if_called)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+            no_watermark=True,
+        )
+
+    assert len(FakeBackendClient.instances) == 1
+    submissions = FakeBackendClient.instances[0].submissions
+    assert [case_id for case_id, _ in submissions] == [5]
+    assert submissions[0][1].startswith(b"\x89PNG")
 
 
 def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
@@ -574,3 +720,29 @@ def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:
             "vlm_model_name": "gpt-4.1-mini",
         }
     ]
+
+
+def test_cli_passes_no_watermark_into_run_runner(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_runner(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(runner_module, "run_runner", fake_run_runner)
+    cli_runner = CliRunner()
+
+    result = cli_runner.invoke(
+        runner_module.cli,
+        [
+            "--workflow",
+            "dummy",
+            "--server",
+            "http://backend:8000",
+            "--password",
+            "pw",
+            "--no-watermark",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["no_watermark"] is True

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
+from functools import lru_cache
 import io
 import json
 import logging
@@ -11,10 +13,24 @@ from typing import Any
 
 import click
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont, ImageStat
 
 from . import chroma, dummy  # noqa: F401
 from .core import WorkflowBase, create_workflow, list_workflows
+
+WATERMARK_PATH = "watermark.png"
+DEFAULT_TOY_ANIMAL_NAME = "Toy Animal"
+MAX_WATERMARK_RATIO = 0.35
+WATERMARK_TEMPLATE_WIDTH = 180
+WATERMARK_TEMPLATE_HEIGHT = 208
+WATERMARK_TEXT_SLOTS = (
+    # Derived from runner/assets/watermark.png and intentionally hardcoded.
+    # Tuple layout: (upper_line_row, target_line_row, left_x, right_x)
+    (80, 99, 24, 158),
+    (99, 119, 24, 158),
+    (119, 140, 24, 158),
+)
+WATERMARK_STROKE_COLOR = (216, 206, 190, 255)
 
 
 @dataclass(slots=True)
@@ -23,6 +39,8 @@ class Job:
     image_bytes: bytes
     requested_images: int
     parameters: dict[str, Any]
+    animal_name: str = ""
+    child_name: str = ""
 
 
 class BackendClient:
@@ -167,6 +185,8 @@ class BackendClient:
             image_bytes=response.content,
             requested_images=self._parse_requested_images(response),
             parameters=self._parse_parameters(response),
+            animal_name=(response.headers.get("X-Animal-Name") or "").strip(),
+            child_name=(response.headers.get("X-Child-Name") or "").strip(),
         )
 
     def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
@@ -195,6 +215,212 @@ def _image_to_png_bytes(image: Image.Image) -> bytes:
     return output.getvalue()
 
 
+@lru_cache(maxsize=1)
+def _load_watermark_template() -> Image.Image:
+    watermark_reference = chroma._resolve_workflow_file(
+        WATERMARK_PATH,
+        description="watermark",
+    )
+    with Image.open(watermark_reference) as watermark_image:
+        return watermark_image.convert("RGBA")
+
+
+def _text_size(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+) -> tuple[int, int]:
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    return right - left, bottom - top
+
+
+def _load_font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
+    if bold:
+        font_names = ("DejaVuSans-Bold.ttf", "arialbd.ttf", "Arial Bold.ttf")
+    else:
+        font_names = ("DejaVuSans.ttf", "Arial.ttf")
+    for font_name in font_names:
+        try:
+            return ImageFont.truetype(font_name, size=size)
+        except OSError:
+            continue
+    if bold:
+        return _load_font(size, bold=False)
+    return ImageFont.load_default()
+
+
+def _fit_text_for_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    max_width: int,
+    max_height: int,
+    *,
+    bold: bool = False,
+) -> tuple[str, ImageFont.ImageFont]:
+    cleaned_text = " ".join(text.strip().split()) or "-"
+    if max_width <= 0 or max_height <= 0:
+        return cleaned_text, ImageFont.load_default()
+
+    for size in range(max(max_height + 2, 9), 7, -1):
+        font = _load_font(size, bold=bold)
+        width, height = _text_size(draw, cleaned_text, font)
+        if width <= max_width and height <= max_height:
+            return cleaned_text, font
+
+    fallback_font = _load_font(9, bold=bold)
+    clipped = cleaned_text
+    while (
+        len(clipped) > 1
+        and _text_size(draw, f"{clipped}...", fallback_font)[0] > max_width
+    ):
+        clipped = clipped[:-1]
+    if (
+        clipped != cleaned_text
+        and _text_size(draw, f"{clipped}...", fallback_font)[0] <= max_width
+    ):
+        clipped = f"{clipped}..."
+    return clipped, fallback_font
+
+
+def _scaled_watermark_text_slots(
+    watermark: Image.Image,
+) -> list[tuple[int, int, int, int]]:
+    scale_x = watermark.width / WATERMARK_TEMPLATE_WIDTH
+    scale_y = watermark.height / WATERMARK_TEMPLATE_HEIGHT
+    scaled: list[tuple[int, int, int, int]] = []
+    for upper_row, target_row, left, right in WATERMARK_TEXT_SLOTS:
+        scaled_upper_row = max(
+            0, min(watermark.height - 1, int(round(upper_row * scale_y)))
+        )
+        scaled_target_row = max(
+            scaled_upper_row + 1,
+            min(watermark.height - 1, int(round(target_row * scale_y))),
+        )
+        scaled_left = max(0, min(watermark.width - 1, int(round(left * scale_x))))
+        scaled_right = max(
+            scaled_left + 1,
+            min(watermark.width - 1, int(round(right * scale_x))),
+        )
+        scaled.append((scaled_upper_row, scaled_target_row, scaled_left, scaled_right))
+    return scaled
+
+
+def _child_line_text(child_name: str) -> str:
+    normalized = " ".join(child_name.strip().split())
+    if not normalized:
+        return "von Kind"
+    return f"von {normalized}"
+
+
+def _draw_watermark_text(
+    watermark: Image.Image,
+    toy_animal_name: str,
+    child_name: str,
+    date_text: str,
+) -> None:
+    draw = ImageDraw.Draw(watermark)
+    slots = _scaled_watermark_text_slots(watermark)
+    labels = [
+        " ".join(toy_animal_name.strip().split()) or DEFAULT_TOY_ANIMAL_NAME,
+        _child_line_text(child_name),
+        date_text,
+    ]
+    upper_gap = max(1, int(round(1.0 * watermark.height / WATERMARK_TEMPLATE_HEIGHT)))
+    lower_gap = max(3, int(round(3.0 * watermark.height / WATERMARK_TEMPLATE_HEIGHT)))
+
+    for label, slot in zip(labels, slots):
+        upper_row, target_row, left, right = slot
+        x_center = (left + right) // 2
+        max_width = max(10, (right - left + 1) - 6)
+        max_height = max(9, target_row - upper_row - upper_gap - lower_gap)
+        text_value, font = _fit_text_for_width(
+            draw,
+            label,
+            max_width=max_width,
+            max_height=max_height,
+            bold=True,
+        )
+        text_width, text_height = _text_size(draw, text_value, font)
+
+        text_bottom_y = target_row - lower_gap
+        min_top_y = upper_row + upper_gap
+        text_top_y = max(min_top_y, text_bottom_y - text_height)
+        text_x = max(0, min(watermark.width - text_width, x_center - (text_width // 2)))
+
+        draw.text(
+            (text_x, text_top_y),
+            text_value,
+            fill=WATERMARK_STROKE_COLOR,
+            font=font,
+        )
+
+
+def _scale_watermark_to_image(
+    image: Image.Image, watermark: Image.Image
+) -> Image.Image:
+    max_width = max(1, int(image.width * MAX_WATERMARK_RATIO))
+    max_height = max(1, int(image.height * MAX_WATERMARK_RATIO))
+    scale = min(max_width / watermark.width, max_height / watermark.height, 1.0)
+    if scale >= 1.0:
+        return watermark
+    scaled_size = (
+        max(1, int(round(watermark.width * scale))),
+        max(1, int(round(watermark.height * scale))),
+    )
+    return watermark.resize(scaled_size, Image.Resampling.LANCZOS)
+
+
+def _find_blackest_corner(
+    image: Image.Image,
+    region_width: int,
+    region_height: int,
+) -> tuple[int, int]:
+    grayscale = image.convert("L")
+    width, height = grayscale.size
+    region_width = max(1, min(region_width, width))
+    region_height = max(1, min(region_height, height))
+    corners = [
+        (0, 0),
+        (width - region_width, 0),
+        (0, height - region_height),
+        (width - region_width, height - region_height),
+    ]
+
+    darkest_corner = corners[0]
+    darkest_mean = float("inf")
+    for x, y in corners:
+        region = grayscale.crop((x, y, x + region_width, y + region_height))
+        mean_value = ImageStat.Stat(region).mean[0]
+        if mean_value < darkest_mean:
+            darkest_mean = mean_value
+            darkest_corner = (x, y)
+    return darkest_corner
+
+
+def _apply_watermark(
+    image: Image.Image,
+    toy_animal_name: str,
+    child_name: str,
+) -> Image.Image:
+    watermark = _load_watermark_template().copy()
+    watermark = _scale_watermark_to_image(image, watermark)
+    _draw_watermark_text(
+        watermark,
+        toy_animal_name=toy_animal_name,
+        child_name=child_name,
+        date_text=datetime.now().strftime("%d.%m.%y"),
+    )
+
+    composited = image.convert("RGBA")
+    position = _find_blackest_corner(
+        composited,
+        region_width=watermark.width,
+        region_height=watermark.height,
+    )
+    composited.alpha_composite(watermark, dest=position)
+    return composited.convert("RGB")
+
+
 def _validate_parameters(
     workflow: WorkflowBase, parameters: dict[str, Any]
 ) -> dict[str, Any]:
@@ -212,6 +438,7 @@ def run_runner(
     server: str,
     password: str,
     debug: bool = False,
+    no_watermark: bool = False,
     vlm_server: str | None = None,
     vlm_server_key: str | None = None,
     vlm_model_name: str | None = None,
@@ -271,7 +498,16 @@ def run_runner(
             submitted_count = 0
             try:
                 for submitted_count, image in enumerate(generated_images, start=1):
-                    result = _image_to_png_bytes(image)
+                    output_image = (
+                        image
+                        if no_watermark
+                        else _apply_watermark(
+                            image,
+                            job.animal_name,
+                            job.child_name,
+                        )
+                    )
+                    result = _image_to_png_bytes(output_image)
                     submission = client.submit_result(job.case_id, result)
                     logging.info(
                         (
@@ -350,6 +586,12 @@ def run_runner(
     help="Enable workflow debug mode (writes intermediate artifacts when supported).",
 )
 @click.option(
+    "--no-watermark",
+    is_flag=True,
+    default=False,
+    help="Skip watermark generation and overlay.",
+)
+@click.option(
     "--vlm-server",
     help="VLM base URL.",
 )
@@ -366,6 +608,7 @@ def cli(
     server: str,
     password: str,
     debug: bool,
+    no_watermark: bool,
     vlm_server: str | None,
     vlm_server_key: str | None,
     vlm_model_name: str | None,
@@ -379,6 +622,7 @@ def cli(
         server=server,
         password=password,
         debug=debug,
+        no_watermark=no_watermark,
         vlm_server=vlm_server,
         vlm_server_key=vlm_server_key,
         vlm_model_name=vlm_model_name,
