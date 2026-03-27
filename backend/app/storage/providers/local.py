@@ -11,7 +11,7 @@ from ..base import StorageProvider
 
 
 class LocalFilesystemProvider(StorageProvider):
-    _SEQUENCE_PATTERN = re.compile(r"_(\d+)_(?:original|xray)\.png$")
+    _SEQUENCE_PATTERN = re.compile(r"_(\d+)_(?:original|xray|combined)\.png$")
 
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = root_dir.resolve()
@@ -78,12 +78,12 @@ class LocalFilesystemProvider(StorageProvider):
     def upload_file(
         self,
         user_ref: int | str,
-        file_type: Literal["normal", "xray"],
+        file_type: Literal["normal", "xray", "combined"],
         file_obj: BinaryIO,
         filename: str,
     ) -> None:
-        if file_type not in {"normal", "xray"}:
-            raise ValueError("file_type must be 'normal' or 'xray'")
+        if file_type not in {"normal", "xray", "combined"}:
+            raise ValueError("file_type must be 'normal', 'xray', or 'combined'")
 
         case_dir = self._resolve_user_ref(user_ref)
         target_dir = case_dir.resolve()

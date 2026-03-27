@@ -17,7 +17,7 @@ class SeafileError(RuntimeError):
 
 
 class SeafileProvider(StorageProvider):
-    _SEQUENCE_PATTERN = re.compile(r"_(\d+)_(?:original|xray)\.png$")
+    _SEQUENCE_PATTERN = re.compile(r"_(\d+)_(?:original|xray|combined)\.png$")
 
     def __init__(
         self,
@@ -293,7 +293,7 @@ class SeafileProvider(StorageProvider):
     def _upload_via_share_link(
         self,
         share_link: str,
-        _file_type: Literal["normal", "xray"],
+        _file_type: Literal["normal", "xray", "combined"],
         file_obj: BinaryIO,
         filename: str,
     ) -> None:
@@ -370,12 +370,12 @@ class SeafileProvider(StorageProvider):
     def upload_file(
         self,
         user_ref: int | str,
-        file_type: Literal["normal", "xray"],
+        file_type: Literal["normal", "xray", "combined"],
         file_obj: BinaryIO,
         filename: str,
     ) -> None:
-        if file_type not in {"normal", "xray"}:
-            raise ValueError("file_type must be 'normal' or 'xray'")
+        if file_type not in {"normal", "xray", "combined"}:
+            raise ValueError("file_type must be 'normal', 'xray', or 'combined'")
 
         if isinstance(user_ref, int) or (
             isinstance(user_ref, str) and user_ref.isdigit()

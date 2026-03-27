@@ -62,6 +62,8 @@ def test_seafile_provider_is_mockable(monkeypatch) -> None:
         "https://seafile.local/s/abcd/", "xray", BytesIO(b"b"), "xray.png"
     )
     assert link_calls == ["https://seafile.local/s/abcd/:xray:xray.png"]
+    provider.upload_file(1, "combined", BytesIO(b"c"), "combined.png")
+    assert upload_calls[-1] == ("/1", "combined.png")
 
     monkeypatch.setattr(
         SeafileProvider,
@@ -69,6 +71,7 @@ def test_seafile_provider_is_mockable(monkeypatch) -> None:
         lambda self, path: [
             {"name": "Bunny_1_original.png"},
             {"name": "Bunny_1_xray.png"},
+            {"name": "Bunny_1_combined.png"},
             {"name": "Otter_2_original.png"},
             {"name": "notes.txt"},
         ],

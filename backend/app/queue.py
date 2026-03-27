@@ -8,6 +8,7 @@ from threading import RLock
 
 from .models import CarouselItem, CaseMetadata, CaseRecord, CaseState
 from .storage import StorageProvider
+from .utils import combine_images_side_by_side
 
 
 class CaseQueue:
@@ -233,6 +234,7 @@ class CaseQueue:
             original_bytes = case.original_bytes
             sequence_number = storage.next_sequence_for_user(case.owner_ref)
             animal_name = self._filename_animal_name(case.metadata.animal_name)
+            combined_bytes = combine_images_side_by_side(original_bytes, output_xray)
 
             storage.upload_file(
                 case.owner_ref,
@@ -245,6 +247,12 @@ class CaseQueue:
                 "xray",
                 BytesIO(output_xray),
                 f"{animal_name}_{sequence_number}_xray.png",
+            )
+            storage.upload_file(
+                case.owner_ref,
+                "combined",
+                BytesIO(combined_bytes),
+                f"{animal_name}_{sequence_number}_combined.png",
             )
 
             approved_at = datetime.now(tz=UTC)

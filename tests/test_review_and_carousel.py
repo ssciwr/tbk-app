@@ -98,6 +98,7 @@ async def test_review_confirm_transition(
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
     assert (storage_root / "1" / "Bunny_1_original.png").exists()
     assert (storage_root / "1" / "Bunny_1_xray.png").exists()
+    assert (storage_root / "1" / "Bunny_1_combined.png").exists()
 
 
 @pytest.mark.anyio
@@ -142,8 +143,10 @@ async def test_review_finalize_same_qr_increments_filename_counter(
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
     assert (storage_root / "7" / "Bunny_1_original.png").exists()
     assert (storage_root / "7" / "Bunny_1_xray.png").exists()
+    assert (storage_root / "7" / "Bunny_1_combined.png").exists()
     assert (storage_root / "7" / "Bunny_2_original.png").exists()
     assert (storage_root / "7" / "Bunny_2_xray.png").exists()
+    assert (storage_root / "7" / "Bunny_2_combined.png").exists()
 
 
 @pytest.mark.anyio

@@ -152,3 +152,4 @@ async def test_fracture_pending_and_finalize(
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
     assert (storage_root / "1" / "Fox_1_original.png").exists()
     assert (storage_root / "1" / "Fox_1_xray.png").exists()
+    assert (storage_root / "1" / "Fox_1_combined.png").exists()

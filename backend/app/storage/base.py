@@ -21,7 +21,7 @@ class StorageProvider(ABC):
     def upload_file(
         self,
         user_ref: int | str,
-        file_type: Literal["normal", "xray"],
+        file_type: Literal["normal", "xray", "combined"],
         file_obj: BinaryIO,
         filename: str,
     ) -> None:

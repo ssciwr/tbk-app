@@ -17,10 +17,12 @@ def test_local_storage_provider_writes_and_path_safety(tmp_path: Path) -> None:
     user_ref = provider.create_storage_for_user()
     provider.upload_file(user_ref, "normal", BytesIO(b"original"), "orig.png")
     provider.upload_file(user_ref, "xray", BytesIO(b"xray"), "xray.png")
+    provider.upload_file(user_ref, "combined", BytesIO(b"combo"), "combo.png")
 
     case_dir = tmp_path / "1"
     assert (case_dir / "orig.png").read_bytes() == b"original"
     assert (case_dir / "xray.png").read_bytes() == b"xray"
+    assert (case_dir / "combo.png").read_bytes() == b"combo"
 
     # Numeric refs must also work.
     provider.upload_file(1, "normal", BytesIO(b"overwrite"), "again.png")
@@ -47,6 +49,9 @@ def test_local_storage_provider_next_sequence_uses_existing_files(
     assert provider.next_sequence_for_user(user_ref) == 1
     provider.upload_file(user_ref, "normal", BytesIO(b"first"), "Bunny_1_original.png")
     provider.upload_file(user_ref, "xray", BytesIO(b"first"), "Bunny_1_xray.png")
+    provider.upload_file(
+        user_ref, "combined", BytesIO(b"first"), "Bunny_1_combined.png"
+    )
     provider.upload_file(user_ref, "normal", BytesIO(b"second"), "Otter_2_original.png")
 
     assert provider.next_sequence_for_user(user_ref) == 3
