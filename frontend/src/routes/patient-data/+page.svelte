@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import jsQR from 'jsqr';
   import { authedFetch } from '$lib/api';
-  import { rememberProfiledCamera, startProfiledCamera } from '$lib/camera';
+  import { rememberProfiledCamera, startProfiledCamera, switchProfiledCamera } from '$lib/camera';
   import { requireAuthRedirect } from '$lib/auth';
 
   let childName = '';
@@ -12,6 +12,7 @@
 
   let submitMessage = '';
   let cameraError = '';
+  let switchingCamera = false;
 
   let videoEl: HTMLVideoElement | null = null;
   let stream: MediaStream | null = null;
@@ -46,6 +47,28 @@
         track.stop();
       }
       stream = null;
+    }
+  }
+
+  async function switchCamera(): Promise<void> {
+    if (switchingCamera || !stream) {
+      return;
+    }
+
+    cameraError = '';
+    switchingCamera = true;
+    const currentStream = stream;
+
+    try {
+      const nextStream = await switchProfiledCamera('patient-data', currentStream, videoEl);
+      stream = nextStream;
+      for (const track of currentStream.getTracks()) {
+        track.stop();
+      }
+    } catch {
+      cameraError = 'No alternative camera available for this browser session.';
+    } finally {
+      switchingCamera = false;
     }
   }
 
@@ -157,6 +180,20 @@
         disableRemotePlayback
         class="preview"
       ></video>
+      <button
+        type="button"
+        class="secondary preview-corner-button switch-camera-overlay-button"
+        on:click={switchCamera}
+        disabled={!stream || switchingCamera}
+        aria-label={switchingCamera ? 'Switching camera' : 'Switch camera'}
+        title={switchingCamera ? 'Switching camera...' : 'Switch camera'}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 12c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm9-7h-3.17l-1.84-2H8.01L6.17 5H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 14H3V7h4.05l1.83-2h6.24l1.83 2H21v12z"
+          ></path>
+        </svg>
+      </button>
     </div>
     {#if cameraError}
       <p style="color:#b23a48;">{cameraError}</p>
@@ -193,6 +230,7 @@
 
 <style>
   .camera-feed {
+    position: relative;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: #121212;
@@ -205,5 +243,35 @@
     max-width: 100%;
     aspect-ratio: 1 / 1;
     object-fit: cover;
+  }
+
+  .preview-corner-button {
+    position: absolute;
+    top: 0.65rem;
+    right: 0.65rem;
+    width: 2rem;
+    height: 2rem;
+    padding: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    z-index: 3;
+    backdrop-filter: blur(2px);
+  }
+
+  .preview-corner-button svg {
+    width: 1rem;
+    height: 1rem;
+    fill: currentColor;
+  }
+
+  .switch-camera-overlay-button {
+    pointer-events: auto;
+  }
+
+  .switch-camera-overlay-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 </style>
