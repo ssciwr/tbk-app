@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
+import re
 from threading import Lock
 from typing import Any, BinaryIO, Literal
 from urllib.parse import urlparse
@@ -17,6 +17,8 @@ class SeafileError(RuntimeError):
 
 
 class SeafileProvider(StorageProvider):
+    _SEQUENCE_PATTERN = re.compile(r"_(\d+)_(?:original|xray)\.png$")
+
     def __init__(
         self,
         server_url: str,
@@ -236,8 +238,6 @@ class SeafileProvider(StorageProvider):
 
         case_root = f"/{case_id}"
         self._create_dir(case_root)
-        self._create_dir(f"{case_root}/normal")
-        self._create_dir(f"{case_root}/xray")
 
         try:
             return self._create_shared_link(case_root)
@@ -293,7 +293,7 @@ class SeafileProvider(StorageProvider):
     def _upload_via_share_link(
         self,
         share_link: str,
-        file_type: Literal["normal", "xray"],
+        _file_type: Literal["normal", "xray"],
         file_obj: BinaryIO,
         filename: str,
     ) -> None:
@@ -306,7 +306,7 @@ class SeafileProvider(StorageProvider):
         upload_info = self._request_json(
             "GET",
             f"/api/v2.1/share-links/{token}/upload/",
-            params={"path": f"/{file_type}"},
+            params={"path": "/"},
         )
         upload_link = (
             upload_info.get("upload_link") if isinstance(upload_info, dict) else None
@@ -322,7 +322,7 @@ class SeafileProvider(StorageProvider):
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
 
-        parent_dir = f"{base_path.rstrip('/')}/{file_type}"
+        parent_dir = base_path.rstrip("/") or "/"
         response = self.session.post(
             upload_link,
             files={"file": (Path(filename).name, file_obj)},
@@ -333,6 +333,39 @@ class SeafileProvider(StorageProvider):
             raise SeafileError(
                 f"Failed uploading file via shared link: {response.status_code}"
             )
+
+    def _resolve_case_root_path(self, user_ref: int | str) -> str:
+        if isinstance(user_ref, int) or (
+            isinstance(user_ref, str) and user_ref.isdigit()
+        ):
+            return f"/{int(user_ref)}"
+
+        if isinstance(user_ref, str) and user_ref.startswith("seafile://"):
+            case_id = int(user_ref.replace("seafile://", "", 1))
+            return f"/{case_id}"
+
+        if isinstance(user_ref, str) and user_ref.startswith("http"):
+            token = self._extract_share_token(user_ref)
+            metadata = self._request_json("GET", f"/api/v2.1/share-links/{token}/")
+            base_path = metadata.get("path")
+            if not isinstance(base_path, str) or not base_path.startswith("/"):
+                raise SeafileError("Unable to resolve base path from shared link")
+            return base_path.rstrip("/") or "/"
+
+        raise ValueError("Unsupported Seafile user reference")
+
+    def next_sequence_for_user(self, user_ref: int | str) -> int:
+        case_root = self._resolve_case_root_path(user_ref)
+        max_sequence = 0
+        for entry in self._list_dir(case_root):
+            name = entry.get("name")
+            if not isinstance(name, str):
+                continue
+            match = self._SEQUENCE_PATTERN.search(name)
+            if match is None:
+                continue
+            max_sequence = max(max_sequence, int(match.group(1)))
+        return max_sequence + 1
 
     def upload_file(
         self,
@@ -348,12 +381,12 @@ class SeafileProvider(StorageProvider):
             isinstance(user_ref, str) and user_ref.isdigit()
         ):
             case_id = int(user_ref)
-            self._upload_to_repo(f"/{case_id}/{file_type}", file_obj, filename)
+            self._upload_to_repo(f"/{case_id}", file_obj, filename)
             return
 
         if isinstance(user_ref, str) and user_ref.startswith("seafile://"):
             case_id = int(user_ref.replace("seafile://", "", 1))
-            self._upload_to_repo(f"/{case_id}/{file_type}", file_obj, filename)
+            self._upload_to_repo(f"/{case_id}", file_obj, filename)
             return
 
         if isinstance(user_ref, str) and user_ref.startswith("http"):

@@ -150,5 +150,5 @@ async def test_fracture_pending_and_finalize(
     assert len(carousel.json()["items"]) == 1
 
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
-    assert (storage_root / "1" / "normal" / f"{case_id}_original.png").exists()
-    assert (storage_root / "1" / "xray" / f"{case_id}_result.png").exists()
+    assert (storage_root / "1" / "Fox_1_original.png").exists()
+    assert (storage_root / "1" / "Fox_1_xray.png").exists()

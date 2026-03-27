@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import UTC, datetime
 from io import BytesIO
+import re
 from threading import RLock
 
 from .models import CarouselItem, CaseMetadata, CaseRecord, CaseState
@@ -33,6 +34,11 @@ class CaseQueue:
             for queued_case_id in self._dispatch_queue
             if queued_case_id != case_id
         )
+
+    def _filename_animal_name(self, raw_name: str) -> str:
+        normalized = "_".join(raw_name.split())
+        safe = re.sub(r"[^\w-]", "_", normalized, flags=re.UNICODE).strip("_")
+        return safe or "animal"
 
     def enqueue_case(
         self,
@@ -225,18 +231,20 @@ class CaseQueue:
             if case.original_bytes is None:
                 raise ValueError("Case has no acquired image")
             original_bytes = case.original_bytes
+            sequence_number = storage.next_sequence_for_user(case.owner_ref)
+            animal_name = self._filename_animal_name(case.metadata.animal_name)
 
             storage.upload_file(
                 case.owner_ref,
                 "normal",
                 BytesIO(original_bytes),
-                f"{case.case_id}_original.png",
+                f"{animal_name}_{sequence_number}_original.png",
             )
             storage.upload_file(
                 case.owner_ref,
                 "xray",
                 BytesIO(output_xray),
-                f"{case.case_id}_result.png",
+                f"{animal_name}_{sequence_number}_xray.png",
             )
 
             approved_at = datetime.now(tz=UTC)

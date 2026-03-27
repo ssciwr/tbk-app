@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+import re
 from threading import Lock
 from typing import BinaryIO, Literal
 from urllib.parse import unquote, urlparse
@@ -10,6 +11,8 @@ from ..base import StorageProvider
 
 
 class LocalFilesystemProvider(StorageProvider):
+    _SEQUENCE_PATTERN = re.compile(r"_(\d+)_(?:original|xray)\.png$")
+
     def __init__(self, root_dir: Path) -> None:
         self.root_dir = root_dir.resolve()
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -26,8 +29,6 @@ class LocalFilesystemProvider(StorageProvider):
     def _case_dir(self, case_id: int) -> Path:
         case_dir = self.root_dir / str(case_id)
         case_dir.mkdir(parents=True, exist_ok=True)
-        (case_dir / "normal").mkdir(exist_ok=True)
-        (case_dir / "xray").mkdir(exist_ok=True)
         return case_dir
 
     def qr_pdf_backend_label(self) -> str:
@@ -60,9 +61,19 @@ class LocalFilesystemProvider(StorageProvider):
         if not case_dir.exists() or not case_dir.is_dir():
             raise ValueError("Referenced local storage path does not exist")
 
-        (case_dir / "normal").mkdir(exist_ok=True)
-        (case_dir / "xray").mkdir(exist_ok=True)
         return case_dir
+
+    def next_sequence_for_user(self, user_ref: int | str) -> int:
+        case_dir = self._resolve_user_ref(user_ref)
+        max_sequence = 0
+        for path in case_dir.iterdir():
+            if not path.is_file():
+                continue
+            match = self._SEQUENCE_PATTERN.search(path.name)
+            if match is None:
+                continue
+            max_sequence = max(max_sequence, int(match.group(1)))
+        return max_sequence + 1
 
     def upload_file(
         self,
@@ -75,7 +86,7 @@ class LocalFilesystemProvider(StorageProvider):
             raise ValueError("file_type must be 'normal' or 'xray'")
 
         case_dir = self._resolve_user_ref(user_ref)
-        target_dir = (case_dir / file_type).resolve()
+        target_dir = case_dir.resolve()
 
         try:
             target_dir.relative_to(case_dir)

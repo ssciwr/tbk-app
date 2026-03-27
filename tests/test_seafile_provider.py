@@ -53,19 +53,27 @@ def test_seafile_provider_is_mockable(monkeypatch) -> None:
 
     ref = provider.create_storage_for_user()
     assert ref.startswith("https://seafile.local/s/")
-    assert (
-        "/1" in created_dirs
-        and "/1/normal" in created_dirs
-        and "/1/xray" in created_dirs
-    )
+    assert "/1" in created_dirs
 
     provider.upload_file(1, "normal", BytesIO(b"a"), "original.png")
-    assert upload_calls == [("/1/normal", "original.png")]
+    assert upload_calls == [("/1", "original.png")]
 
     provider.upload_file(
         "https://seafile.local/s/abcd/", "xray", BytesIO(b"b"), "xray.png"
     )
     assert link_calls == ["https://seafile.local/s/abcd/:xray:xray.png"]
+
+    monkeypatch.setattr(
+        SeafileProvider,
+        "_list_dir",
+        lambda self, path: [
+            {"name": "Bunny_1_original.png"},
+            {"name": "Bunny_1_xray.png"},
+            {"name": "Otter_2_original.png"},
+            {"name": "notes.txt"},
+        ],
+    )
+    assert provider.next_sequence_for_user(1) == 3
 
 
 def test_seafile_provider_repo_token_mode(monkeypatch) -> None:

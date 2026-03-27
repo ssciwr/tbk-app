@@ -96,8 +96,54 @@ async def test_review_confirm_transition(
     assert items[0]["metadata"]["qr_content"] == "1"
 
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
-    assert (storage_root / "1" / "normal" / f"{case_id}_original.png").exists()
-    assert (storage_root / "1" / "xray" / f"{case_id}_result.png").exists()
+    assert (storage_root / "1" / "Bunny_1_original.png").exists()
+    assert (storage_root / "1" / "Bunny_1_xray.png").exists()
+
+
+@pytest.mark.anyio
+async def test_review_finalize_same_qr_increments_filename_counter(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+    settings,
+) -> None:
+    first_case_id = await _create_case_ready_for_review(
+        client, auth_headers, png_bytes, qr_content="7"
+    )
+    first_confirmed = await client.post(
+        f"/api/review/{first_case_id}/decision",
+        headers=auth_headers,
+        json={"action": "confirm", "choice_index": 0},
+    )
+    assert first_confirmed.status_code == 200
+    first_finalized = await client.post(
+        f"/api/fracture/{first_case_id}/decision",
+        headers=auth_headers,
+        json={"action": "proceed_without_breaking"},
+    )
+    assert first_finalized.status_code == 200
+
+    second_case_id = await _create_case_ready_for_review(
+        client, auth_headers, png_bytes, qr_content="7"
+    )
+    second_confirmed = await client.post(
+        f"/api/review/{second_case_id}/decision",
+        headers=auth_headers,
+        json={"action": "confirm", "choice_index": 0},
+    )
+    assert second_confirmed.status_code == 200
+    second_finalized = await client.post(
+        f"/api/fracture/{second_case_id}/decision",
+        headers=auth_headers,
+        json={"action": "proceed_without_breaking"},
+    )
+    assert second_finalized.status_code == 200
+
+    storage_root = Path(settings.LOCAL_STORAGE_ROOT)
+    assert (storage_root / "7" / "Bunny_1_original.png").exists()
+    assert (storage_root / "7" / "Bunny_1_xray.png").exists()
+    assert (storage_root / "7" / "Bunny_2_original.png").exists()
+    assert (storage_root / "7" / "Bunny_2_xray.png").exists()
 
 
 @pytest.mark.anyio

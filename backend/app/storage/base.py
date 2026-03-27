@@ -14,6 +14,10 @@ class StorageProvider(ABC):
         """Create per-case storage and return a user-facing reference."""
 
     @abstractmethod
+    def next_sequence_for_user(self, user_ref: int | str) -> int:
+        """Return the next acquisition sequence number for a per-case location."""
+
+    @abstractmethod
     def upload_file(
         self,
         user_ref: int | str,
