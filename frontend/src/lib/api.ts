@@ -1,5 +1,6 @@
 import { env } from '$env/dynamic/public';
 import { writable } from 'svelte/store';
+import { clearStoredCameraSelections } from '$lib/camera';
 
 const BASE = (env.PUBLIC_BACKEND_URL || '').trim().replace(/\/$/, '');
 const TOKEN_KEY = 'teddy_hospital_jwt';
@@ -47,6 +48,7 @@ export function setToken(token: string): void {
 
 export function clearToken(): void {
   window.localStorage.removeItem(TOKEN_KEY);
+  clearStoredCameraSelections();
   authToken.set(null);
   cachedAppConfig = { ...defaultAppConfig };
   appConfigLoaded = false;

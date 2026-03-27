@@ -43,6 +43,14 @@ function clearStoredDeviceId(profile: CameraProfile): void {
   window.localStorage.removeItem(getStorageKey(profile));
 }
 
+export function clearStoredCameraSelections(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  clearStoredDeviceId('patient-data');
+  clearStoredDeviceId('camera');
+}
+
 function getOtherProfile(profile: CameraProfile): CameraProfile {
   return profile === 'patient-data' ? 'camera' : 'patient-data';
 }
