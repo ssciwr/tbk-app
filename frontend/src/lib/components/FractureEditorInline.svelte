@@ -32,6 +32,7 @@
 
   let tool: 'brush' | 'eraser' = 'brush';
   let brushSize = 14;
+  let sizeSliderOpen = false;
 
   let imageEl: HTMLImageElement | null = null;
   let canvasEl: HTMLCanvasElement | null = null;
@@ -39,8 +40,6 @@
   let drawing = false;
   let lastX = 0;
   let lastY = 0;
-  let undoStack: string[] = [];
-  let redoStack: string[] = [];
 
   $: if (imageSrc !== sourceImageUrl) {
     sourceImageUrl = imageSrc;
@@ -49,8 +48,7 @@
     message = '';
     tool = 'brush';
     brushSize = 14;
-    undoStack = [];
-    redoStack = [];
+    sizeSliderOpen = false;
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
       previewUrl = null;
@@ -66,78 +64,6 @@
     canvasCtx.globalCompositeOperation = 'source-over';
     canvasCtx.clearRect(0, 0, canvasEl.width, canvasEl.height);
     canvasCtx.restore();
-  }
-
-  function snapshotOverlay(): string | null {
-    if (!canvasEl) {
-      return null;
-    }
-    try {
-      return canvasEl.toDataURL('image/png');
-    } catch {
-      return null;
-    }
-  }
-
-  function pushUndoSnapshot(): void {
-    const snapshot = snapshotOverlay();
-    if (!snapshot) {
-      return;
-    }
-    undoStack = [...undoStack, snapshot];
-    if (undoStack.length > 30) {
-      undoStack = undoStack.slice(undoStack.length - 30);
-    }
-    redoStack = [];
-  }
-
-  function restoreOverlay(snapshot: string): void {
-    if (!canvasEl || !canvasCtx) {
-      return;
-    }
-    const image = new Image();
-    image.onload = () => {
-      if (!canvasEl || !canvasCtx) {
-        return;
-      }
-      canvasCtx.save();
-      canvasCtx.globalCompositeOperation = 'source-over';
-      canvasCtx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-      canvasCtx.drawImage(image, 0, 0, canvasEl.width, canvasEl.height);
-      canvasCtx.restore();
-    };
-    image.src = snapshot;
-  }
-
-  function undoOverlay(): void {
-    if (undoStack.length === 0) {
-      return;
-    }
-    const current = snapshotOverlay();
-    const previous = undoStack[undoStack.length - 1];
-    undoStack = undoStack.slice(0, undoStack.length - 1);
-    if (current) {
-      redoStack = [...redoStack, current];
-    }
-    restoreOverlay(previous);
-  }
-
-  function redoOverlay(): void {
-    if (redoStack.length === 0) {
-      return;
-    }
-    const current = snapshotOverlay();
-    const next = redoStack[redoStack.length - 1];
-    redoStack = redoStack.slice(0, redoStack.length - 1);
-    if (current) {
-      undoStack = [...undoStack, current];
-    }
-    restoreOverlay(next);
-  }
-
-  function clearOverlay(): void {
-    pushUndoSnapshot();
-    clearOverlayDirect();
   }
 
   function syncCanvasToImage(): void {
@@ -180,11 +106,17 @@
   }
 
   function startDrawing(event: PointerEvent): void {
-    if (!canvasEl || event.button !== 0) {
+    if (!canvasEl) {
+      return;
+    }
+    if (sizeSliderOpen) {
+      sizeSliderOpen = false;
+      return;
+    }
+    if (event.button !== 0) {
       return;
     }
     event.preventDefault();
-    pushUndoSnapshot();
     drawing = true;
     try {
       canvasEl.setPointerCapture(event.pointerId);
@@ -650,8 +582,7 @@
       previewUrl = null;
     }
     currentImageUrl = baseImageUrl;
-    undoStack = [];
-    redoStack = [];
+    sizeSliderOpen = false;
     clearOverlayDirect();
     message = 'Reset to selected image.';
   }
@@ -712,8 +643,6 @@
       }
       previewUrl = nextPreviewUrl;
       currentImageUrl = nextPreviewUrl;
-      undoStack = [];
-      redoStack = [];
       clearOverlayDirect();
       message = `Case #${caseId}: bone removed in masked region (${processed.erasedPixels} px).`;
     } catch {
@@ -730,6 +659,25 @@
     onFinalize?.(action);
   }
 
+  function selectTool(nextTool: 'brush' | 'eraser'): void {
+    if (busy || previewBusy) {
+      return;
+    }
+    tool = nextTool;
+    sizeSliderOpen = true;
+  }
+
+  function cancelEdits(): void {
+    if (busy || previewBusy) {
+      return;
+    }
+    resetPreview();
+  }
+
+  function acceptCurrentImage(): void {
+    emitFinalize('proceed_without_breaking');
+  }
+
   onDestroy(() => {
     if (previewUrl) {
       URL.revokeObjectURL(previewUrl);
@@ -739,34 +687,6 @@
 
 <div class="editor-shell">
   <p class="editor-label">Editor: {caseLabel}</p>
-
-  <div class="editor-toolbar">
-    <button type="button" class:active={tool === 'brush'} on:click={() => (tool = 'brush')}>
-      Brush
-    </button>
-    <button type="button" class:active={tool === 'eraser'} on:click={() => (tool = 'eraser')}>
-      Eraser
-    </button>
-    <label class="editor-control">
-      Brush size
-      <input type="range" min="1" max="64" step="1" bind:value={brushSize} />
-      <span>{Math.round(Number(brushSize))} px</span>
-    </label>
-  </div>
-
-  <div class="editor-actions">
-    <button type="button" class="secondary" on:click={undoOverlay} disabled={undoStack.length === 0}>
-      Undo
-    </button>
-    <button type="button" class="secondary" on:click={redoOverlay} disabled={redoStack.length === 0}>
-      Redo
-    </button>
-    <button type="button" class="secondary" on:click={clearOverlay}>Clear Overlay</button>
-    <button type="button" class="secondary" on:click={resetPreview}>Reset Preview</button>
-    <button type="button" class="ok" on:click={breakBone} disabled={previewBusy || busy || !currentImageUrl}>
-      {previewBusy ? 'Breaking...' : 'Break bone'}
-    </button>
-  </div>
 
   <div class="editor-stage">
     {#if currentImageUrl}
@@ -787,29 +707,89 @@
           on:pointerleave={stopDrawing}
           on:pointercancel={stopDrawing}
         ></canvas>
+
+        <div class="editor-overlay-controls">
+          <button
+            type="button"
+            class="secondary editor-icon-button"
+            class:active={tool === 'brush'}
+            on:click={() => selectTool('brush')}
+            disabled={busy || previewBusy}
+            aria-label="Brush tool"
+            title="Brush"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="m15.88 3.29-7.6 7.6 4.24 4.24 7.6-7.6a1 1 0 0 0 0-1.42l-2.82-2.82a1 1 0 0 0-1.42 0ZM4.5 14.5a3.5 3.5 0 0 0-3.5 3.5c0 1.9 1.65 3.5 4 3.5 2.44 0 4.5-2.06 4.5-4.5A2.5 2.5 0 0 0 7 14.5H4.5Z"
+              ></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="secondary editor-icon-button"
+            class:active={tool === 'eraser'}
+            on:click={() => selectTool('eraser')}
+            disabled={busy || previewBusy}
+            aria-label="Eraser tool"
+            title="Eraser"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="m12.23 3.17-9.06 9.06a2.25 2.25 0 0 0 0 3.18l4.24 4.24A2.25 2.25 0 0 0 9 20.34h.76l10.07-10.07a2.25 2.25 0 0 0 0-3.18l-4.42-4.42a2.25 2.25 0 0 0-3.18 0Zm6 5.51L9.31 17.6h-.38a.75.75 0 0 1-.53-.22l-3.96-3.96a.75.75 0 0 1 0-1.06l8.53-8.53a.75.75 0 0 1 1.06 0l4.2 4.2a.75.75 0 0 1 0 1.06ZM12.5 21h8v2h-8z"
+              ></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="secondary editor-icon-button is-danger"
+            on:click={cancelEdits}
+            disabled={busy || previewBusy}
+            aria-label="Cancel edits"
+            title="Cancel edits"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="secondary editor-icon-button is-accent"
+            on:click={breakBone}
+            disabled={previewBusy || busy || !currentImageUrl}
+            aria-label={previewBusy ? 'Breaking bone' : 'Break bone'}
+            title={previewBusy ? 'Breaking bone...' : 'Break bone'}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m3 21 7-7 2 2-7 7H3v-2Z"></path>
+              <path d="m14.5 3 1.1 2.4L18 6.5l-2.4 1.1L14.5 10l-1.1-2.4L11 6.5l2.4-1.1L14.5 3Z"></path>
+              <path d="m20 10 .7 1.5L22 12l-1.3.5L20 14l-.7-1.5L18 12l1.3-.5L20 10Z"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="secondary editor-icon-button is-accept"
+            on:click={acceptCurrentImage}
+            disabled={busy || previewBusy}
+            aria-label="Accept image"
+            title="Accept image"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
+            </svg>
+          </button>
+        </div>
+
+        {#if sizeSliderOpen}
+          <div class="editor-size-slider-overlay">
+            <span>{tool === 'brush' ? 'Brush size' : 'Eraser size'}</span>
+            <input type="range" min="1" max="64" step="1" bind:value={brushSize} />
+            <strong>{Math.round(Number(brushSize))} px</strong>
+          </div>
+        {/if}
       </div>
     {:else}
       <div class="preview-frame">Selected image unavailable</div>
     {/if}
-  </div>
-
-  <div class="editor-footer">
-    <button
-      type="button"
-      class="secondary"
-      on:click={() => emitFinalize('proceed_without_breaking')}
-      disabled={busy || previewBusy}
-    >
-      Finalize without breaking
-    </button>
-    <button
-      type="button"
-      class="ok"
-      on:click={() => emitFinalize('apply_bone_breaking')}
-      disabled={busy || previewBusy}
-    >
-      Finalize with bone breaking
-    </button>
   </div>
 
   {#if message}
@@ -829,36 +809,6 @@
     color: #4f5358;
   }
 
-  .editor-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    align-items: center;
-  }
-
-  .editor-toolbar button.active {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(14, 124, 123, 0.18);
-  }
-
-  .editor-control {
-    margin: 0;
-    display: grid;
-    gap: 0.2rem;
-    min-width: 170px;
-  }
-
-  .editor-control span {
-    font-size: 0.85rem;
-    color: #505050;
-  }
-
-  .editor-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
   .editor-stage {
     display: grid;
     place-items: center;
@@ -873,6 +823,8 @@
     position: relative;
     display: inline-block;
     max-width: 100%;
+    border-radius: 10px;
+    overflow: hidden;
   }
 
   .editor-image {
@@ -895,10 +847,86 @@
     border-radius: 10px;
   }
 
-  .editor-footer {
+  .editor-overlay-controls {
+    position: absolute;
+    top: 0.65rem;
+    right: 0.65rem;
+    display: grid;
+    gap: 0.45rem;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  .editor-icon-button {
+    width: 2.15rem;
+    height: 2.15rem;
+    border-radius: 999px;
+    padding: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    backdrop-filter: blur(2px);
+    background: rgba(255, 255, 255, 0.93);
+    border: 1px solid rgba(120, 120, 120, 0.35);
+  }
+
+  .editor-icon-button svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: currentColor;
+  }
+
+  .editor-icon-button.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(14, 124, 123, 0.2);
+    color: var(--accent);
+  }
+
+  .editor-icon-button.is-danger {
+    color: #b23a48;
+  }
+
+  .editor-icon-button.is-accent {
+    color: #0e7c7b;
+  }
+
+  .editor-icon-button.is-accept {
+    color: #0f7a35;
+  }
+
+  .editor-icon-button:disabled {
+    opacity: 0.58;
+    cursor: not-allowed;
+  }
+
+  .editor-size-slider-overlay {
+    position: absolute;
+    left: 50%;
+    bottom: 0.7rem;
+    transform: translateX(-50%);
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.45rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid rgba(120, 120, 120, 0.35);
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(2px);
+    z-index: 4;
+    pointer-events: auto;
+  }
+
+  .editor-size-slider-overlay span,
+  .editor-size-slider-overlay strong {
+    font-size: 0.78rem;
+    color: #3f454b;
+    white-space: nowrap;
+  }
+
+  .editor-size-slider-overlay input {
+    width: min(220px, 42vw);
   }
 
   .preview-frame {
