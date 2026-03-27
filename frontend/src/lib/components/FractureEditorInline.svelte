@@ -5,9 +5,13 @@
   export let caseLabel = '';
   export let imageSrc: string | null = null;
   export let busy = false;
-  export let onFinalize: ((action: FinalizeAction) => void) | null = null;
 
   type FinalizeAction = 'proceed_without_breaking' | 'apply_bone_breaking';
+  type FinalizeRequest = {
+    action: FinalizeAction;
+    imageBlob?: Blob;
+  };
+  export let onFinalize: ((request: FinalizeRequest) => void) | null = null;
   type BoneBreakComputation = {
     output: ImageData;
     erasedPixels: number;
@@ -29,6 +33,7 @@
 
   let message = '';
   let previewBusy = false;
+  let submitting = false;
 
   let tool: 'brush' | 'eraser' = 'brush';
   let brushSize = 14;
@@ -46,6 +51,7 @@
     baseImageUrl = imageSrc;
     currentImageUrl = imageSrc;
     message = '';
+    submitting = false;
     tool = 'brush';
     brushSize = 14;
     sizeSliderOpen = false;
@@ -656,11 +662,18 @@
     if (busy || previewBusy) {
       return;
     }
-    onFinalize?.(action);
+    onFinalize?.({ action });
+  }
+
+  function emitFinalizeWithImage(action: FinalizeAction, imageBlob: Blob): void {
+    if (busy || previewBusy) {
+      return;
+    }
+    onFinalize?.({ action, imageBlob });
   }
 
   function selectTool(nextTool: 'brush' | 'eraser'): void {
-    if (busy || previewBusy) {
+    if (busy || previewBusy || submitting) {
       return;
     }
     tool = nextTool;
@@ -668,14 +681,36 @@
   }
 
   function cancelEdits(): void {
-    if (busy || previewBusy) {
+    if (busy || previewBusy || submitting) {
       return;
     }
     resetPreview();
   }
 
-  function acceptCurrentImage(): void {
-    emitFinalize('proceed_without_breaking');
+  async function acceptCurrentImage(): Promise<void> {
+    if (!currentImageUrl || busy || previewBusy || submitting) {
+      return;
+    }
+
+    submitting = true;
+    message = '';
+    try {
+      const response = await fetch(currentImageUrl);
+      if (!response.ok) {
+        message = 'Failed to prepare image for submission.';
+        return;
+      }
+      const imageBlob = await response.blob();
+      if (!imageBlob || imageBlob.size === 0) {
+        message = 'Generated image is empty and cannot be submitted.';
+        return;
+      }
+      emitFinalizeWithImage('proceed_without_breaking', imageBlob);
+    } catch {
+      message = 'Failed to prepare image for submission.';
+    } finally {
+      submitting = false;
+    }
   }
 
   onDestroy(() => {
@@ -714,7 +749,7 @@
             class="secondary editor-icon-button"
             class:active={tool === 'brush'}
             on:click={() => selectTool('brush')}
-            disabled={busy || previewBusy}
+            disabled={busy || previewBusy || submitting}
             aria-label="Brush tool"
             title="Brush"
           >
@@ -729,7 +764,7 @@
             class="secondary editor-icon-button"
             class:active={tool === 'eraser'}
             on:click={() => selectTool('eraser')}
-            disabled={busy || previewBusy}
+            disabled={busy || previewBusy || submitting}
             aria-label="Eraser tool"
             title="Eraser"
           >
@@ -743,7 +778,7 @@
             type="button"
             class="secondary editor-icon-button is-danger"
             on:click={cancelEdits}
-            disabled={busy || previewBusy}
+            disabled={busy || previewBusy || submitting}
             aria-label="Cancel edits"
             title="Cancel edits"
           >
@@ -755,7 +790,7 @@
             type="button"
             class="secondary editor-icon-button is-accent"
             on:click={breakBone}
-            disabled={previewBusy || busy || !currentImageUrl}
+            disabled={previewBusy || busy || submitting || !currentImageUrl}
             aria-label={previewBusy ? 'Breaking bone' : 'Break bone'}
             title={previewBusy ? 'Breaking bone...' : 'Break bone'}
           >
@@ -769,7 +804,7 @@
             type="button"
             class="secondary editor-icon-button is-accept"
             on:click={acceptCurrentImage}
-            disabled={busy || previewBusy}
+            disabled={busy || previewBusy || submitting}
             aria-label="Accept image"
             title="Accept image"
           >

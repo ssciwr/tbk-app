@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
+from PIL import Image
 
 
 async def _create_case_pending_fracture(
@@ -153,3 +154,33 @@ async def test_fracture_pending_and_finalize(
     assert (storage_root / "1" / "Fox_1_original.png").exists()
     assert (storage_root / "1" / "Fox_1_xray.png").exists()
     assert (storage_root / "1" / "Fox_1_combined.png").exists()
+
+
+@pytest.mark.anyio
+async def test_fracture_submit_uploaded_image(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    case_id = await _create_case_pending_fracture(client, auth_headers, png_bytes)
+
+    edited = Image.new("RGB", (32, 32), color=(18, 18, 18))
+    edited_buf = io.BytesIO()
+    edited.save(edited_buf, format="PNG")
+    edited_bytes = edited_buf.getvalue()
+
+    submitted = await client.post(
+        f"/api/fracture/{case_id}/submit",
+        headers=auth_headers,
+        files={"image": ("edited.png", io.BytesIO(edited_bytes), "image/png")},
+    )
+    assert submitted.status_code == 200
+    assert submitted.json() == {"status": "submitted"}
+
+    pending_after = await client.get("/api/fracture/pending", headers=auth_headers)
+    assert pending_after.status_code == 200
+    assert pending_after.json()["cases"] == []
+
+    xray = await client.get("/api/carousel/0/xray", headers=auth_headers)
+    assert xray.status_code == 200
+    assert xray.content == edited_bytes

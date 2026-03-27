@@ -111,6 +111,31 @@ async def fracture_decision(
     return {"status": "submitted"}
 
 
+@router.post("/{case_id}/submit")
+async def fracture_submit(
+    case_id: int,
+    image: Annotated[UploadFile, File(...)],
+    _: Annotated[dict, Depends(require_auth)],
+    services: Annotated[Services, Depends(get_services)],
+) -> dict[str, str]:
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Submitted fracture image is empty")
+
+    try:
+        services.queue.finalize_case(
+            case_id,
+            output_xray=image_bytes,
+            storage=services.storage,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "submitted"}
+
+
 @router.post("/cases/{case_id}/results/{index}")
 async def fracture_apply_noop(
     case_id: int,

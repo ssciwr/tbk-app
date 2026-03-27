@@ -6,6 +6,10 @@
   import { requireAuthRedirect } from '$lib/auth';
 
   type FinalizeAction = 'proceed_without_breaking' | 'apply_bone_breaking';
+  type FinalizeRequest = {
+    action: FinalizeAction;
+    imageBlob?: Blob;
+  };
 
   type ApiPendingFractureCase = {
     case_id: number;
@@ -76,15 +80,25 @@
     loading = false;
   }
 
-  async function decide(caseId: number, action: FinalizeAction): Promise<void> {
+  async function decide(caseId: number, request: FinalizeRequest): Promise<void> {
     actionMessage = '';
     decidingCaseId = caseId;
     try {
-      const response = await authedFetch(`/api/fracture/${caseId}/decision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
-      });
+      let response: Response;
+      if (request.imageBlob) {
+        const form = new FormData();
+        form.append('image', request.imageBlob, `fracture-${caseId}.png`);
+        response = await authedFetch(`/api/fracture/${caseId}/submit`, {
+          method: 'POST',
+          body: form
+        });
+      } else {
+        response = await authedFetch(`/api/fracture/${caseId}/decision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: request.action })
+        });
+      }
 
       if (!response.ok) {
         actionMessage = `Failed to submit case ${caseId}.`;
@@ -154,7 +168,7 @@
             caseLabel={`${pending.metadata.child_name} / ${pending.metadata.animal_name}`}
             imageSrc={pending.selected_url}
             busy={decidingCaseId === pending.case_id}
-            onFinalize={(action) => void decide(pending.case_id, action)}
+            onFinalize={(request) => void decide(pending.case_id, request)}
           />
         </article>
       {/each}
