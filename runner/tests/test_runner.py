@@ -180,6 +180,57 @@ def test_chroma_debug_helpers_write_prompt_and_images(tmp_path: Path) -> None:
         assert saved.size == (8, 8)
 
 
+def test_chroma_first_pass_uses_watchdog_output_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.setattr(
+        chroma_module,
+        "_run_first_pass_alpha_with_watchdog",
+        lambda *_args, **_kwargs: Image.new("RGB", (4, 4), color=(7, 11, 13)),
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "_run_first_pass_remove",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fallback should not run")
+        ),
+    )
+
+    result = chroma_module.remove_background_first_pass(
+        Image.new("RGB", (4, 4), color=(10, 10, 10)),
+        session=object(),
+    )
+
+    assert result.getpixel((0, 0)) == (7, 11, 13)
+
+
+def test_chroma_first_pass_retries_without_alpha_matting_when_watchdog_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.setattr(
+        chroma_module,
+        "_run_first_pass_alpha_with_watchdog",
+        lambda *_args, **_kwargs: None,
+    )
+    calls: list[bool] = []
+
+    def _fake_remove(_image: Image.Image, **kwargs: Any) -> Image.Image:
+        calls.append(bool(kwargs["alpha_matting"]))
+        return Image.new("RGB", (4, 4), color=(0, 255, 0))
+
+    monkeypatch.setattr(chroma_module, "_run_first_pass_remove", _fake_remove)
+
+    result = chroma_module.remove_background_first_pass(
+        Image.new("RGB", (4, 4), color=(10, 10, 10)),
+        session=object(),
+    )
+
+    assert calls == [False]
+    assert result.getpixel((0, 0)) == (0, 255, 0)
+
+
 def test_dummy_workflow_generate_yields_seed_varied_images(monkeypatch) -> None:
     monkeypatch.setattr(dummy_module, "RUNNER_PROCESS_SECONDS", 0.0)
     workflow = dummy_module.DummyWorkflow()
