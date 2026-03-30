@@ -44,6 +44,7 @@ class Job:
     parameters: dict[str, Any]
     animal_name: str = ""
     child_name: str = ""
+    animal_type: str = ""
 
 
 class BackendClient:
@@ -191,6 +192,7 @@ class BackendClient:
             parameters=self._parse_parameters(response),
             animal_name=(response.headers.get("X-Animal-Name") or "").strip(),
             child_name=(response.headers.get("X-Child-Name") or "").strip(),
+            animal_type=(response.headers.get("X-Animal-Type") or "").strip(),
         )
 
     def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
@@ -539,9 +541,14 @@ def run_runner(
             ):
                 with Image.open(io.BytesIO(job.image_bytes)) as source_image:
                     source_image.load()
+                    workflow_parameters = dict(
+                        _validate_parameters(workflow, job.parameters)
+                    )
+                    if job.animal_type:
+                        workflow_parameters["animal_type"] = job.animal_type
                     generated_images = workflow.generate(
                         source_image.copy(),
-                        _validate_parameters(workflow, job.parameters),
+                        workflow_parameters,
                         job.requested_images,
                         debug=debug,
                     )

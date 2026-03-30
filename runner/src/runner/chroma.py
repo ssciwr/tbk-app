@@ -54,7 +54,7 @@ IMAGE_HEIGHT = 1024
 MONOCHROME_BACKGROUND_PATH = "monochrome_background.png"
 
 # VLM analysis
-VLM_PROMPT_INSTRUCTION = """You are a visual analysis and prompt-engineering specialist. You are shown a single, clear, frontal image of a plush toy animal. Your goal is to:
+VLM_PROMPT_INSTRUCTION_BASE = """You are a visual analysis and prompt-engineering specialist. You are shown a single, clear, frontal image of a plush toy animal. Your goal is to:
 Analyze the image carefully and describe the plush animal's external anatomical features in exhaustive detail, including:
 The type of animal it represents (e.g., monkey, bear, rabbit).
 The posture and orientation (e.g., sitting, standing, crouching, head facing forward or tilted).
@@ -117,6 +117,30 @@ def _require_chroma_dependencies() -> None:
             "`pip install -r runner/requirements-chroma.txt`. "
             f"Original import error: {_CHROMA_IMPORT_ERROR}"
         ) from _CHROMA_IMPORT_ERROR
+
+
+def _normalize_animal_type_hint(raw_hint: Any) -> str:
+    if not isinstance(raw_hint, str):
+        return ""
+    return " ".join(raw_hint.strip().split())
+
+
+def build_vlm_prompt_instruction(*, animal_type_hint: str) -> str:
+    cleaned_hint = _normalize_animal_type_hint(animal_type_hint)
+    if cleaned_hint:
+        hint_guidance = (
+            f'User-provided animal type hint: "{cleaned_hint}".\n'
+            "Use this as the animal type anchor when constructing the final prompt, "
+            "while still matching all visible anatomy and pose details in the image."
+        )
+    else:
+        hint_guidance = (
+            "User-provided animal type hint: (none).\n"
+            "Infer the animal type directly from the image."
+        )
+    return (
+        f"{VLM_PROMPT_INSTRUCTION_BASE}\n\n" "Additional guidance:\n" f"{hint_guidance}"
+    )
 
 
 def _strip_incomplete_cholesky_warning(message: str) -> str:
@@ -812,12 +836,15 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         num_images: int = 1,
         debug: bool = False,
     ) -> Generator[Image.Image, None, None]:
-        del parameters
         self._assert_ready()
         assert self._pipe is not None
         assert self._sdxl_pipe is not None
         assert self._first_pass_session is not None
         assert self._second_pass_session is not None
+        workflow_parameters = parameters or {}
+        animal_type_hint = _normalize_animal_type_hint(
+            workflow_parameters.get("animal_type")
+        )
 
         debug_dir: Path | None = None
         if debug:
@@ -858,10 +885,13 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             self.vlm_model_name,
             key_state,
         )
+        prompt_instruction = build_vlm_prompt_instruction(
+            animal_type_hint=animal_type_hint
+        )
 
         final_prompt = generate_prompt_with_openai_compatible(
             image=first_rembg_image,
-            instruction=VLM_PROMPT_INSTRUCTION,
+            instruction=prompt_instruction,
             base_url=normalized_vlm_server,
             api_key=self.vlm_server_key,
             model=self.vlm_model_name,

@@ -25,6 +25,7 @@ async def carousel_list(
                 "metadata": {
                     "child_name": item.metadata.child_name,
                     "animal_name": item.metadata.animal_name,
+                    "animal_type": item.metadata.animal_type,
                     "broken_bone": item.broken_bone,
                     "qr_content": item.owner_ref,
                 },

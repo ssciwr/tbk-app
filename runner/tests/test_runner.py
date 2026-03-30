@@ -180,6 +180,26 @@ def test_chroma_debug_helpers_write_prompt_and_images(tmp_path: Path) -> None:
         assert saved.size == (8, 8)
 
 
+def test_chroma_build_vlm_prompt_instruction_infers_when_no_hint() -> None:
+    chroma_module = runner_module.chroma
+
+    instruction = chroma_module.build_vlm_prompt_instruction(animal_type_hint="")
+
+    assert "User-provided animal type hint: (none)." in instruction
+    assert "Infer the animal type directly from the image." in instruction
+
+
+def test_chroma_build_vlm_prompt_instruction_uses_user_hint() -> None:
+    chroma_module = runner_module.chroma
+
+    instruction = chroma_module.build_vlm_prompt_instruction(
+        animal_type_hint="  red   fox ",
+    )
+
+    assert 'User-provided animal type hint: "red fox".' in instruction
+    assert "Use this as the animal type anchor" in instruction
+
+
 def test_chroma_first_pass_uses_watchdog_output_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -270,6 +290,7 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
             "X-Case-Id": "42",
             "X-Child-Name": "Ada",
             "X-Animal-Name": "Bunny",
+            "X-Animal-Type": "rabbit",
             "X-Requested-Images": "3",
             "X-Workflow-Parameters": '{"strength": 0.7}',
         },
@@ -288,6 +309,7 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
     assert job.parameters == {"strength": 0.7}
     assert job.animal_name == "Bunny"
     assert job.child_name == "Ada"
+    assert job.animal_type == "rabbit"
 
 
 def test_scaled_watermark_text_slots_follow_hardcoded_template() -> None:
@@ -471,6 +493,7 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
                     image_bytes=source_image,
                     requested_images=3,
                     parameters={"alpha": 0.3},
+                    animal_type="fox",
                 )
             raise KeyboardInterrupt
 
@@ -495,7 +518,7 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
         )
 
     assert workflow.setup_called is True
-    assert workflow.generate_calls == [({"alpha": 0.3}, 3, False)]
+    assert workflow.generate_calls == [({"alpha": 0.3, "animal_type": "fox"}, 3, False)]
     assert len(FakeBackendClient.instances) == 1
     fake_client = FakeBackendClient.instances[0]
     assert fake_client.server == "http://backend:8000"

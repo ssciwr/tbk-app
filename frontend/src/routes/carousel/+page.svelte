@@ -8,6 +8,7 @@
     metadata: {
       child_name: string;
       animal_name: string;
+      animal_type?: string;
       broken_bone: boolean;
       qr_content: string;
     };

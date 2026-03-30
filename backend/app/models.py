@@ -20,6 +20,7 @@ class CaseState(str, Enum):
 class CaseMetadata:
     child_name: str
     animal_name: str
+    animal_type: str = ""
 
 
 @dataclass(slots=True)

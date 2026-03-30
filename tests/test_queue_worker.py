@@ -8,17 +8,25 @@ from httpx import AsyncClient
 
 
 async def _upload_case(
-    client: AsyncClient, auth_headers: dict[str, str], image_bytes: bytes
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    image_bytes: bytes,
+    *,
+    animal_type: str | None = None,
 ) -> int:
+    payload = {
+        "child_name": "Ada",
+        "animal_name": "Teddy",
+        "qr_content": "1",
+        "broken_bone": "false",
+    }
+    if animal_type is not None:
+        payload["animal_type"] = animal_type
+
     created = await client.post(
         "/api/cases",
         headers=auth_headers,
-        data={
-            "child_name": "Ada",
-            "animal_name": "Teddy",
-            "qr_content": "1",
-            "broken_bone": "false",
-        },
+        data=payload,
     )
     assert created.status_code == 200
     created_payload = created.json()
@@ -70,6 +78,44 @@ async def test_case_metadata_pending_image_and_discard(
     pending_after = await client.get("/api/cases/pending-image", headers=auth_headers)
     assert pending_after.status_code == 200
     assert pending_after.json()["cases"] == []
+
+
+@pytest.mark.anyio
+async def test_case_animal_type_is_exposed_in_pending_and_worker_headers(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    created = await client.post(
+        "/api/cases",
+        headers=auth_headers,
+        data={
+            "child_name": "Ada",
+            "animal_name": "Teddy",
+            "animal_type": "fox",
+            "qr_content": "1",
+        },
+    )
+    assert created.status_code == 200
+    case_id = int(created.json()["case_id"])
+
+    pending = await client.get("/api/cases/pending-image", headers=auth_headers)
+    assert pending.status_code == 200
+    pending_cases = pending.json()["cases"]
+    assert pending_cases and pending_cases[0]["case_id"] == case_id
+    assert pending_cases[0]["metadata"]["animal_type"] == "fox"
+
+    upload = await client.post(
+        f"/api/cases/{case_id}/image",
+        headers=auth_headers,
+        files={"file": ("case.png", io.BytesIO(png_bytes), "image/png")},
+    )
+    assert upload.status_code == 200
+
+    next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert next_job.status_code == 200
+    assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert next_job.headers["X-Animal-Type"] == "fox"
 
 
 @pytest.mark.anyio

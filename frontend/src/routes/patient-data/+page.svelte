@@ -8,6 +8,7 @@
 
   let childName = '';
   let animalName = '';
+  let animalType = '';
   let qrContent = '';
 
   let submitMessage = '';
@@ -138,6 +139,7 @@
     const form = new FormData();
     form.append('child_name', childName);
     form.append('animal_name', animalName);
+    form.append('animal_type', animalType);
     form.append('qr_content', qrContent);
 
     const response = await authedFetch('/api/cases', {
@@ -212,6 +214,11 @@
       <label>
         Animal name
         <input bind:value={animalName} required />
+      </label>
+
+      <label>
+        Animal type (optional)
+        <input bind:value={animalType} placeholder="e.g. bear, rabbit, fox" />
       </label>
 
       <label>

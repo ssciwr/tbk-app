@@ -19,11 +19,13 @@ async def create_case(
     qr_content: Annotated[str, Form(...)],
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
+    animal_type: Annotated[str | None, Form()] = None,
     broken_bone: Annotated[bool, Form()] = False,
 ) -> dict[str, int | str]:
     metadata = CaseMetadata(
         child_name=child_name.strip(),
         animal_name=animal_name.strip(),
+        animal_type=(animal_type or "").strip(),
     )
 
     case = services.queue.enqueue_case(
@@ -52,6 +54,7 @@ async def pending_image_cases(
                 "metadata": {
                     "child_name": case.metadata.child_name,
                     "animal_name": case.metadata.animal_name,
+                    "animal_type": case.metadata.animal_type,
                     "broken_bone": case.broken_bone,
                     "qr_content": case.owner_ref,
                 },

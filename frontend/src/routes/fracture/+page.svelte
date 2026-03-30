@@ -16,6 +16,7 @@
     metadata: {
       child_name: string;
       animal_name: string;
+      animal_type?: string;
     };
     selected_url: string;
   };
