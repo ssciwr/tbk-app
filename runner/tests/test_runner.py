@@ -353,6 +353,25 @@ def test_backend_client_report_failed_job_posts_endpoint(monkeypatch) -> None:
     assert captured["kwargs"] == {}
 
 
+def test_backend_client_heartbeat_posts_endpoint(monkeypatch) -> None:
+    client = runner_module.BackendClient(server="http://backend:8000", password="pw")
+    captured: dict[str, Any] = {}
+
+    def fake_request(method: str, path: str, **kwargs: Any) -> _FakeResponse:
+        captured["method"] = method
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return _FakeResponse(status_code=200, json_payload={"status": "ok"})
+
+    monkeypatch.setattr(client, "_request_with_auth", fake_request)
+
+    client.heartbeat()
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/worker/heartbeat"
+    assert captured["kwargs"] == {}
+
+
 def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
     source_image = _png_bytes()
 
@@ -660,6 +679,77 @@ def test_run_runner_passes_debug_flag_into_generate(monkeypatch) -> None:
         )
 
     assert workflow.debug_calls == [True]
+
+
+def test_run_runner_sends_processing_heartbeat_when_available(monkeypatch) -> None:
+    source_image = _png_bytes()
+
+    class FakeWorkflow:
+        name = "dummy"
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            return None
+
+        def parameter_schema(self) -> dict[str, Any]:
+            return {"type": "object"}
+
+        def generate(
+            self,
+            img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            _num_images: int = 1,
+            debug: bool = False,
+        ):
+            del debug
+            yield Image.new("RGB", img.size, color=(9, 8, 7))
+
+    class FakeBackendClient:
+        instances: list["FakeBackendClient"] = []
+
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+            self.heartbeat_calls = 0
+            self._next_calls = 0
+            FakeBackendClient.instances.append(self)
+
+        def next_job(self) -> runner_module.Job | None:
+            self._next_calls += 1
+            if self._next_calls == 1:
+                return runner_module.Job(
+                    case_id=10,
+                    image_bytes=source_image,
+                    requested_images=1,
+                    parameters={},
+                )
+            raise KeyboardInterrupt
+
+        def heartbeat(self) -> None:
+            self.heartbeat_calls += 1
+
+        def submit_result(self, _case_id: int, _image_bytes: bytes) -> dict[str, Any]:
+            return {
+                "status": "accepted",
+                "received_results": 1,
+                "expected_results": 1,
+                "ready_for_review": True,
+            }
+
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: FakeWorkflow())
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+        )
+
+    assert len(FakeBackendClient.instances) == 1
+    assert FakeBackendClient.instances[0].heartbeat_calls >= 1
 
 
 def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:

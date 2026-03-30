@@ -11,6 +11,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import JSONResponse
 
 from ..auth import require_auth
 from ..models import CaseState
@@ -18,6 +19,7 @@ from ..state import Services, get_services
 from ..utils import apply_no_cache_headers, ensure_png
 
 router = APIRouter(prefix="/worker", tags=["worker"])
+RUNNER_HEARTBEAT_STALE_AFTER_SECONDS = 30.0
 
 
 @router.get("/jobs/next")
@@ -25,6 +27,7 @@ async def worker_next_job(
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
 ) -> Response:
+    services.runner_heartbeat.record_poll()
     case = services.queue.get_next_job()
     if case is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -37,6 +40,33 @@ async def worker_next_job(
     response.headers["X-Expected-Results"] = str(case.expected_results)
     apply_no_cache_headers(response)
     return response
+
+
+@router.get("/status")
+async def worker_status(
+    _: Annotated[dict, Depends(require_auth)],
+    services: Annotated[Services, Depends(get_services)],
+) -> JSONResponse:
+    last_poll_at = services.runner_heartbeat.last_poll_at()
+    payload = {
+        "runner_connected": services.runner_heartbeat.is_connected(
+            stale_after_seconds=RUNNER_HEARTBEAT_STALE_AFTER_SECONDS
+        ),
+        "last_poll_at": last_poll_at.isoformat() if last_poll_at else None,
+        "stale_after_seconds": int(RUNNER_HEARTBEAT_STALE_AFTER_SECONDS),
+    }
+    response = JSONResponse(content=payload)
+    apply_no_cache_headers(response)
+    return response
+
+
+@router.post("/heartbeat")
+async def worker_heartbeat(
+    _: Annotated[dict, Depends(require_auth)],
+    services: Annotated[Services, Depends(get_services)],
+) -> dict[str, str]:
+    services.runner_heartbeat.record_poll()
+    return {"status": "ok"}
 
 
 @router.post("/jobs/{case_id}/results")

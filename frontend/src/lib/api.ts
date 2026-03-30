@@ -13,6 +13,12 @@ export type AppConfig = {
   fracture_editor_enabled: boolean;
 };
 
+export type RunnerStatus = {
+  runner_connected: boolean;
+  last_poll_at: string | null;
+  stale_after_seconds: number;
+};
+
 const defaultAppConfig: AppConfig = {
   fracture_editor_enabled: true
 };
@@ -97,4 +103,16 @@ export async function loadAppConfig(force = false): Promise<AppConfig> {
   }
 
   return cachedAppConfig;
+}
+
+export async function loadRunnerStatus(): Promise<RunnerStatus | null> {
+  try {
+    const response = await authedFetch('/api/worker/status', { cache: 'no-store' });
+    if (!response.ok) {
+      return null;
+    }
+    return (await response.json()) as RunnerStatus;
+  } catch {
+    return null;
+  }
 }

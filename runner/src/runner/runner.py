@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import datetime
 from functools import lru_cache
 import io
 import json
 import logging
 import os
+from threading import Event, RLock, Thread
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +33,7 @@ WATERMARK_TEXT_SLOTS = (
     (119, 140, 24, 158),
 )
 WATERMARK_STROKE_COLOR = (216, 206, 190, 255)
+DEFAULT_PROCESSING_HEARTBEAT_SECONDS = 5.0
 
 
 @dataclass(slots=True)
@@ -52,6 +55,7 @@ class BackendClient:
         self.session = requests.Session()
         self.token: str | None = None
         self.token_expires_at = 0.0
+        self._request_lock = RLock()
 
     def _refresh_token(self, *, force: bool = False) -> None:
         now = time.time()
@@ -117,17 +121,8 @@ class BackendClient:
     def _request_with_auth(
         self, method: str, path: str, **kwargs: Any
     ) -> requests.Response:
-        self._refresh_token()
-        response = self.session.request(
-            method,
-            f"{self.base_url}{path}",
-            headers=self._auth_headers(),
-            timeout=self.timeout_seconds,
-            **kwargs,
-        )
-
-        if response.status_code == 401:
-            self._refresh_token(force=True)
+        with self._request_lock:
+            self._refresh_token()
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
@@ -135,6 +130,15 @@ class BackendClient:
                 timeout=self.timeout_seconds,
                 **kwargs,
             )
+            if response.status_code == 401:
+                self._refresh_token(force=True)
+                response = self.session.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    headers=self._auth_headers(),
+                    timeout=self.timeout_seconds,
+                    **kwargs,
+                )
 
         return response
 
@@ -207,6 +211,46 @@ class BackendClient:
         response = self._request_with_auth("POST", f"/api/worker/jobs/{case_id}/failed")
         response.raise_for_status()
         return response.json()
+
+    def heartbeat(self) -> None:
+        response = self._request_with_auth("POST", "/api/worker/heartbeat")
+        response.raise_for_status()
+
+
+@contextmanager
+def _processing_heartbeat(
+    *,
+    client: Any,
+    heartbeat_seconds: float,
+) -> Iterable[None]:
+    heartbeat = getattr(client, "heartbeat", None)
+    if not callable(heartbeat) or heartbeat_seconds <= 0:
+        yield
+        return
+
+    stop_event = Event()
+
+    def heartbeat_loop() -> None:
+        while not stop_event.wait(heartbeat_seconds):
+            try:
+                heartbeat()
+            except Exception:
+                logging.exception("Failed to send runner heartbeat while processing.")
+
+    try:
+        heartbeat()
+    except Exception:
+        logging.exception("Failed to send initial processing heartbeat.")
+
+    thread = Thread(
+        target=heartbeat_loop, name="runner-processing-heartbeat", daemon=True
+    )
+    thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        thread.join(timeout=max(heartbeat_seconds, 1.0))
 
 
 def _image_to_png_bytes(image: Image.Image) -> bytes:
@@ -460,10 +504,20 @@ def run_runner(
 
     client = BackendClient(server=server, password=password)
     poll_seconds = float(os.getenv("RUNNER_POLL_SECONDS", "2"))
+    heartbeat_seconds = float(
+        os.getenv(
+            "RUNNER_PROCESSING_HEARTBEAT_SECONDS",
+            str(DEFAULT_PROCESSING_HEARTBEAT_SECONDS),
+        )
+    )
     logging.info(
-        "Runner started with workflow=%s, poll_interval=%.1fs",
+        (
+            "Runner started with workflow=%s, poll_interval=%.1fs, "
+            "processing_heartbeat_interval=%.1fs"
+        ),
         workflow.name,
         poll_seconds,
+        heartbeat_seconds,
     )
 
     while True:
@@ -479,77 +533,81 @@ def run_runner(
                 job.requested_images,
             )
 
-            with Image.open(io.BytesIO(job.image_bytes)) as source_image:
-                source_image.load()
-                generated_images = workflow.generate(
-                    source_image.copy(),
-                    _validate_parameters(workflow, job.parameters),
-                    job.requested_images,
-                    debug=debug,
-                )
-            if not isinstance(generated_images, Iterable):
-                raise RuntimeError(
-                    (
-                        f"Workflow '{workflow.name}' returned a non-iterable from "
-                        "generate()."
+            with _processing_heartbeat(
+                client=client,
+                heartbeat_seconds=heartbeat_seconds,
+            ):
+                with Image.open(io.BytesIO(job.image_bytes)) as source_image:
+                    source_image.load()
+                    generated_images = workflow.generate(
+                        source_image.copy(),
+                        _validate_parameters(workflow, job.parameters),
+                        job.requested_images,
+                        debug=debug,
                     )
-                )
-
-            submitted_count = 0
-            try:
-                for submitted_count, image in enumerate(generated_images, start=1):
-                    output_image = (
-                        image
-                        if no_watermark
-                        else _apply_watermark(
-                            image,
-                            job.animal_name,
-                            job.child_name,
-                        )
-                    )
-                    result = _image_to_png_bytes(output_image)
-                    submission = client.submit_result(job.case_id, result)
-                    logging.info(
-                        (
-                            "Submitted result %s for case %s (%s/%s, "
-                            "ready_for_review=%s, status=%s)."
-                        ),
-                        submitted_count,
-                        job.case_id,
-                        submission.get("received_results"),
-                        submission.get("expected_results"),
-                        submission.get("ready_for_review"),
-                        submission.get("status"),
-                    )
-
-                if submitted_count == 0:
+                if not isinstance(generated_images, Iterable):
                     raise RuntimeError(
                         (
-                            f"Workflow '{workflow.name}' yielded no images for case "
-                            f"{job.case_id}."
+                            f"Workflow '{workflow.name}' returned a non-iterable from "
+                            "generate()."
                         )
                     )
-            except Exception:
-                logging.exception(
-                    "Case %s failed after submitting %s/%s result image(s).",
-                    job.case_id,
-                    submitted_count,
-                    job.requested_images,
-                )
-                if submitted_count < job.requested_images:
-                    try:
-                        failure_report = client.report_failed_job(job.case_id)
+
+                submitted_count = 0
+                try:
+                    for submitted_count, image in enumerate(generated_images, start=1):
+                        output_image = (
+                            image
+                            if no_watermark
+                            else _apply_watermark(
+                                image,
+                                job.animal_name,
+                                job.child_name,
+                            )
+                        )
+                        result = _image_to_png_bytes(output_image)
+                        submission = client.submit_result(job.case_id, result)
                         logging.info(
-                            "Reported failed job for case %s: %s.",
+                            (
+                                "Submitted result %s for case %s (%s/%s, "
+                                "ready_for_review=%s, status=%s)."
+                            ),
+                            submitted_count,
                             job.case_id,
-                            failure_report.get("status"),
+                            submission.get("received_results"),
+                            submission.get("expected_results"),
+                            submission.get("ready_for_review"),
+                            submission.get("status"),
                         )
-                    except Exception:
-                        logging.exception(
-                            "Failed to report job failure for case %s.",
-                            job.case_id,
+
+                    if submitted_count == 0:
+                        raise RuntimeError(
+                            (
+                                f"Workflow '{workflow.name}' yielded no images for case "
+                                f"{job.case_id}."
+                            )
                         )
-                time.sleep(poll_seconds)
+                except Exception:
+                    logging.exception(
+                        "Case %s failed after submitting %s/%s result image(s).",
+                        job.case_id,
+                        submitted_count,
+                        job.requested_images,
+                    )
+                    if submitted_count < job.requested_images:
+                        try:
+                            failure_report = client.report_failed_job(job.case_id)
+                            logging.info(
+                                "Reported failed job for case %s: %s.",
+                                job.case_id,
+                                failure_report.get("status"),
+                            )
+                        except Exception:
+                            logging.exception(
+                                "Failed to report job failure for case %s.",
+                                job.case_id,
+                            )
+                    time.sleep(poll_seconds)
         except KeyboardInterrupt:
             raise
         except Exception:

@@ -76,6 +76,7 @@ The dummy workflow polls `/api/worker/jobs/next`, waits 5 seconds per case, perf
 Optional runner env vars:
 - `RUNNER_POLL_SECONDS` (default `2`)
 - `RUNNER_HTTP_TIMEOUT_SECONDS` (default `30`)
+- `RUNNER_PROCESSING_HEARTBEAT_SECONDS` (default `5`)
 
 Chroma workflow VLM settings are passed explicitly via runner CLI options:
 - `--vlm-server`

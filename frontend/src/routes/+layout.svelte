@@ -1,8 +1,8 @@
 <script lang="ts">
   import '../app.css';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { authToken, clearToken, loadAppConfig } from '$lib/api';
+  import { authToken, clearToken, loadAppConfig, loadRunnerStatus } from '$lib/api';
   import { goto } from '$app/navigation';
 
   type StageKey = 'patient-data' | 'camera' | 'review' | 'fracture' | 'results';
@@ -21,6 +21,7 @@
     { key: 'fracture', href: '/fracture', label: 'Apply fractures', stage: 4 },
     { key: 'results', href: '/results', label: 'View Results', stage: 5 }
   ];
+  const RUNNER_STATUS_POLL_MS = 5000;
 
   function logout(): void {
     clearToken();
@@ -35,6 +36,9 @@
   let fractureStageEnabled = true;
   let configLoadingForToken: string | null = null;
   let pipelineStages: PipelineStage[] = [];
+  let runnerConnected: boolean | null = null;
+  let runnerStatusPollHandle: ReturnType<typeof setInterval> | null = null;
+  let runnerStatusToken: string | null = null;
 
   async function syncAppConfig(force = false): Promise<void> {
     if (!$authToken) {
@@ -51,6 +55,34 @@
     fractureStageEnabled = config.fracture_editor_enabled;
   }
 
+  async function refreshRunnerStatus(): Promise<void> {
+    if (!$authToken) {
+      runnerConnected = null;
+      return;
+    }
+
+    const status = await loadRunnerStatus();
+    if (!status) {
+      return;
+    }
+    runnerConnected = status.runner_connected;
+  }
+
+  function stopRunnerStatusPolling(): void {
+    if (runnerStatusPollHandle) {
+      clearInterval(runnerStatusPollHandle);
+      runnerStatusPollHandle = null;
+    }
+  }
+
+  function startRunnerStatusPolling(): void {
+    stopRunnerStatusPolling();
+    void refreshRunnerStatus();
+    runnerStatusPollHandle = setInterval(() => {
+      void refreshRunnerStatus();
+    }, RUNNER_STATUS_POLL_MS);
+  }
+
   $: pipelineStages = basePipelineStages.map((stage) => ({
     ...stage,
     enabled: stage.key === 'fracture' ? fractureStageEnabled : true
@@ -60,8 +92,22 @@
     void syncAppConfig(true);
   });
 
+  onDestroy(() => {
+    stopRunnerStatusPolling();
+  });
+
   $: if ($authToken) {
     void syncAppConfig();
+  }
+
+  $: if ($authToken !== runnerStatusToken) {
+    runnerStatusToken = $authToken;
+    if (!$authToken) {
+      runnerConnected = null;
+      stopRunnerStatusPolling();
+    } else {
+      startRunnerStatusPolling();
+    }
   }
 
   $: isCarouselShowcase =
@@ -95,6 +141,12 @@
         {/each}
       </div>
     </header>
+  {/if}
+
+  {#if $authToken && runnerConnected === false}
+    <div class="runner-warning" role="alert">
+      No runner is currently connected. Image generation does not work right now.
+    </div>
   {/if}
 
   <main class="app-main" class:showcase-main={isCarouselShowcase}>
@@ -216,6 +268,17 @@
     margin-left: auto;
   }
 
+  .runner-warning {
+    max-width: 1100px;
+    margin: 0.9rem auto 0;
+    padding: 0.7rem 0.9rem;
+    border: 1px solid #d18f00;
+    border-radius: 10px;
+    background: #fff4d8;
+    color: #5c3d00;
+    font-weight: 600;
+  }
+
   @media (max-width: 900px) {
     .pipeline-track {
       justify-content: flex-start;
@@ -231,6 +294,10 @@
 
     .layout-footer .logout-link {
       margin-left: 0;
+    }
+
+    .runner-warning {
+      margin: 0.75rem 1rem 0;
     }
   }
 </style>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import io
 
 import pytest
@@ -114,6 +115,40 @@ async def test_worker_next_job_and_204_behavior(
 
     empty = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert empty.status_code == 204
+
+
+@pytest.mark.anyio
+async def test_worker_status_reports_runner_heartbeat(
+    app,
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    initial_status = await client.get("/api/worker/status", headers=auth_headers)
+    assert initial_status.status_code == 200
+    initial_payload = initial_status.json()
+    assert initial_payload["runner_connected"] is False
+    assert initial_payload["last_poll_at"] is None
+    assert initial_payload["stale_after_seconds"] == 30
+
+    heartbeat = await client.post("/api/worker/heartbeat", headers=auth_headers)
+    assert heartbeat.status_code == 200
+    assert heartbeat.json() == {"status": "ok"}
+
+    after_poll_status = await client.get("/api/worker/status", headers=auth_headers)
+    assert after_poll_status.status_code == 200
+    after_poll_payload = after_poll_status.json()
+    assert after_poll_payload["runner_connected"] is True
+    assert after_poll_payload["last_poll_at"] is not None
+    assert after_poll_payload["stale_after_seconds"] == 30
+
+    app.state.services.runner_heartbeat.record_poll(
+        datetime.now(tz=UTC) - timedelta(seconds=31)
+    )
+    stale_status = await client.get("/api/worker/status", headers=auth_headers)
+    assert stale_status.status_code == 200
+    stale_payload = stale_status.json()
+    assert stale_payload["runner_connected"] is False
+    assert stale_payload["last_poll_at"] is not None
 
 
 @pytest.mark.anyio
