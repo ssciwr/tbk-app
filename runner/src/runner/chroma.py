@@ -96,6 +96,7 @@ SDXL_PROMPT = "xray"
 DEBUG_OUTPUT_DIR_NAME = "debug-output"
 FIRST_PASS_ALPHA_TIMEOUT_SECONDS = 120.0
 FIRST_PASS_WATCHDOG_POLL_SECONDS = 0.2
+FIRST_PASS_SUBPROCESS_START_METHOD = "spawn"
 INCOMPLETE_CHOLESKY_WARNING_PATTERN = re.compile(
     r"(?ms)PERFORMANCE WARNING:\s*"
     r"Thresholded incomplete Cholesky decomposition failed due to insufficient positive-definiteness of matrix A with parameters:\s*"
@@ -165,6 +166,22 @@ def _run_first_pass_remove(
     )
 
 
+def _new_first_pass_session(*, cpu_only: bool) -> Any:
+    _require_chroma_dependencies()
+    assert new_session is not None
+    if not cpu_only:
+        return new_session(model_name="u2net")
+
+    try:
+        return new_session(
+            model_name="u2net",
+            providers=["CPUExecutionProvider"],
+        )
+    except TypeError:
+        # Older rembg builds may not expose a providers argument.
+        return new_session(model_name="u2net")
+
+
 def _serialize_image_to_png_bytes(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -174,17 +191,14 @@ def _serialize_image_to_png_bytes(image: Image.Image) -> bytes:
 def _remove_first_pass_subprocess_worker(
     image_bytes: bytes,
     result_queue: Any,
-    session: Any,
 ) -> None:
     try:
         with Image.open(io.BytesIO(image_bytes)) as source_image:
             image = source_image.convert("RGB")
 
-        active_session = session
-        if active_session is None:
-            _require_chroma_dependencies()
-            assert new_session is not None
-            active_session = new_session(model_name="u2net")
+        # Build a fresh CPU-only session inside the subprocess to avoid
+        # CUDA/ORT initialization issues in spawned workers.
+        active_session = _new_first_pass_session(cpu_only=True)
 
         with contextlib.redirect_stdout(
             _QueueTextStream(result_queue, "stdout")
@@ -243,10 +257,7 @@ def _drain_first_pass_queue(
 
 
 def _start_first_pass_context() -> multiprocessing.context.BaseContext:
-    available_methods = multiprocessing.get_all_start_methods()
-    if "fork" in available_methods:
-        return multiprocessing.get_context("fork")
-    return multiprocessing.get_context()
+    return multiprocessing.get_context(FIRST_PASS_SUBPROCESS_START_METHOD)
 
 
 def _run_first_pass_alpha_with_watchdog(
@@ -254,18 +265,14 @@ def _run_first_pass_alpha_with_watchdog(
     *,
     session: Any,
 ) -> Image.Image | bytes | None:
+    del session
     process_context = _start_first_pass_context()
     result_queue = process_context.Queue()
     image_bytes = _serialize_image_to_png_bytes(image)
 
-    shared_session = (
-        session
-        if process_context.get_start_method(allow_none=False) == "fork"
-        else None
-    )
     process = process_context.Process(
         target=_remove_first_pass_subprocess_worker,
-        args=(image_bytes, result_queue, shared_session),
+        args=(image_bytes, result_queue),
         daemon=True,
     )
     process.start()
