@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from pathlib import Path
 import re
 from threading import Lock
@@ -10,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from ..base import StorageProvider
+from .readme_template import README_FILENAME, parents_readme_bytes
 
 
 class SeafileError(RuntimeError):
@@ -238,6 +240,9 @@ class SeafileProvider(StorageProvider):
 
         case_root = f"/{case_id}"
         self._create_dir(case_root)
+        self._upload_to_repo(
+            case_root, BytesIO(parents_readme_bytes()), README_FILENAME
+        )
 
         try:
             return self._create_shared_link(case_root)

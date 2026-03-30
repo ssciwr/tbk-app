@@ -54,9 +54,10 @@ def test_seafile_provider_is_mockable(monkeypatch) -> None:
     ref = provider.create_storage_for_user()
     assert ref.startswith("https://seafile.local/s/")
     assert "/1" in created_dirs
+    assert upload_calls == [("/1", "README.md")]
 
     provider.upload_file(1, "normal", BytesIO(b"a"), "original.png")
-    assert upload_calls == [("/1", "original.png")]
+    assert upload_calls[-1] == ("/1", "original.png")
 
     provider.upload_file(
         "https://seafile.local/s/abcd/", "xray", BytesIO(b"b"), "xray.png"

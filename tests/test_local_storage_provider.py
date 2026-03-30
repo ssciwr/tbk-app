@@ -20,6 +20,9 @@ def test_local_storage_provider_writes_and_path_safety(tmp_path: Path) -> None:
     provider.upload_file(user_ref, "combined", BytesIO(b"combo"), "combo.png")
 
     case_dir = tmp_path / "1"
+    assert (
+        (case_dir / "README.md").read_text(encoding="utf-8").startswith("Liebe Eltern,")
+    )
     assert (case_dir / "orig.png").read_bytes() == b"original"
     assert (case_dir / "xray.png").read_bytes() == b"xray"
     assert (case_dir / "combo.png").read_bytes() == b"combo"

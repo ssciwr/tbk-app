@@ -8,6 +8,7 @@ from typing import BinaryIO, Literal
 from urllib.parse import unquote, urlparse
 
 from ..base import StorageProvider
+from .readme_template import README_FILENAME, parents_readme_bytes
 
 
 class LocalFilesystemProvider(StorageProvider):
@@ -39,6 +40,7 @@ class LocalFilesystemProvider(StorageProvider):
             case_id = self._next_id
             self._next_id += 1
         case_dir = self._case_dir(case_id)
+        (case_dir / README_FILENAME).write_bytes(parents_readme_bytes())
         return case_dir.as_uri()
 
     def _resolve_user_ref(self, user_ref: int | str) -> Path:
