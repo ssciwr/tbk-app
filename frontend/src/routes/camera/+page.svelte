@@ -28,10 +28,12 @@
   let uploadMessage = '';
   let cameraError = '';
   let switchingCamera = false;
+  let uploadingImage = false;
 
   let videoEl: HTMLVideoElement | null = null;
   let stream: MediaStream | null = null;
   let pollHandle: ReturnType<typeof setInterval> | null = null;
+  let uploadInputEl: HTMLInputElement | null = null;
 
   let capturedFile: File | null = null;
   let previewUrl = '';
@@ -124,11 +126,18 @@
     loadingCases = false;
 
     if (cases.length === 0) {
-      selectedCaseId = null;
+      if (!capturedFile) {
+        selectedCaseId = null;
+      }
       return;
     }
 
-    if (!selectedCaseId || !cases.some((item) => item.case_id === selectedCaseId)) {
+    if (!selectedCaseId) {
+      selectedCaseId = cases[0].case_id;
+      return;
+    }
+
+    if (!cases.some((item) => item.case_id === selectedCaseId) && !capturedFile) {
       selectedCaseId = cases[0].case_id;
     }
   }
@@ -190,6 +199,7 @@
   function setCaptured(file: File): void {
     resetCropEdit();
     capturedFile = file;
+    uploadMessage = '';
     revokePreview();
     previewUrl = URL.createObjectURL(file);
   }
@@ -198,6 +208,7 @@
     resetCropEdit();
     capturedFile = null;
     captureMessage = '';
+    uploadMessage = '';
     revokePreview();
   }
 
@@ -632,7 +643,7 @@
     }
 
     setCaptured(new File([blob], `capture-${Date.now()}.png`, { type: 'image/png' }));
-    captureMessage = 'Image captured.';
+    captureMessage = 'Image captured. Cancel or accept.';
   }
 
   $: if (videoEl && stream && videoEl.srcObject !== stream) {
@@ -644,16 +655,23 @@
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (file) {
+      captureMessage = 'Image loaded. Cancel or accept.';
       setCaptured(file);
     }
+    input.value = '';
   }
 
-  async function submitImage(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
+  async function acceptCapturedImage(): Promise<void> {
     uploadMessage = '';
+    let caseId = selectedCaseId;
 
-    if (!selectedCaseId) {
-      uploadMessage = 'Select a case first.';
+    if (!caseId && cases.length > 0) {
+      caseId = cases[0].case_id;
+      selectedCaseId = caseId;
+    }
+
+    if (!caseId) {
+      uploadMessage = 'Select a case first before accepting.';
       return;
     }
 
@@ -662,20 +680,47 @@
       return;
     }
 
-    const form = new FormData();
-    form.append('file', capturedFile);
+    uploadingImage = true;
+    try {
+      const form = new FormData();
+      form.append('file', capturedFile);
 
-    const response = await authedFetch(`/api/cases/${selectedCaseId}/image`, {
-      method: 'POST',
-      body: form
-    });
+      const response = await authedFetch(`/api/cases/${caseId}/image`, {
+        method: 'POST',
+        body: form
+      });
 
-    if (!response.ok) {
-      uploadMessage = `Failed to upload image for case ${selectedCaseId}.`;
+      if (!response.ok) {
+        uploadMessage = `Failed to upload image for case ${caseId}.`;
+        return;
+      }
+
+      await goto('/review');
+    } finally {
+      uploadingImage = false;
+    }
+  }
+
+  function isTypingContext(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) {
+      return false;
+    }
+    return Boolean(target.closest('input, textarea, select, button, a, [contenteditable="true"]'));
+  }
+
+  function handleCaptureShortcut(event: KeyboardEvent): void {
+    if (previewUrl || cropEditMode || uploadingImage || isTypingContext(event.target)) {
       return;
     }
 
-    await goto('/review');
+    const isSpace = event.code === 'Space' || event.key === ' ';
+    const isEnter = event.key === 'Enter';
+    if (!isSpace && !isEnter) {
+      return;
+    }
+
+    event.preventDefault();
+    void captureFromWebcam();
   }
 
   onMount(async () => {
@@ -683,11 +728,13 @@
     if (!token) {
       return;
     }
+    window.addEventListener('keydown', handleCaptureShortcut);
     await Promise.all([startCamera(), loadPendingCases()]);
     pollHandle = setInterval(loadPendingCases, 2000);
   });
 
   onDestroy(() => {
+    window.removeEventListener('keydown', handleCaptureShortcut);
     if (pollHandle) {
       clearInterval(pollHandle);
       pollHandle = null;
@@ -779,40 +826,73 @@
               </div>
             {/if}
           </div>
-          <button
-            type="button"
-            class="secondary preview-corner-button confirm-crop-button"
-            on:click={confirmCropEdit}
-            disabled={!cropSelection || cropSelection.size < 8}
-            aria-label="Confirm crop"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="secondary preview-corner-button cancel-crop-button"
-            on:click={cancelCropEdit}
-            aria-label="Cancel edit"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
-            </svg>
-          </button>
+          <div class="overlay-control-stack">
+            <button
+              type="button"
+              class="secondary preview-corner-button confirm-crop-button"
+              on:click={confirmCropEdit}
+              disabled={!cropSelection || cropSelection.size < 8 || uploadingImage}
+              aria-label="Confirm crop"
+              title="Confirm crop"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="secondary preview-corner-button cancel-crop-button"
+              on:click={cancelCropEdit}
+              disabled={uploadingImage}
+              aria-label="Cancel crop edit"
+              title="Cancel crop edit"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
+              </svg>
+            </button>
+          </div>
         {:else}
-          <button
-            type="button"
-            class="secondary preview-corner-button edit-crop-button"
-            on:click={startCropEdit}
-            aria-label="Edit crop"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92-9.06 9.06zM20.71 7.04a1.003 1.003 0 0 0 0-1.42L18.37 3.29a1.003 1.003 0 0 0-1.42 0L15.13 5.1l3.75 3.75 1.83-1.81z"
-              ></path>
-            </svg>
-          </button>
+          <div class="overlay-control-stack">
+            <button
+              type="button"
+              class="secondary preview-corner-button edit-crop-button"
+              on:click={startCropEdit}
+              disabled={uploadingImage}
+              aria-label="Edit crop"
+              title="Edit crop"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92-9.06 9.06zM20.71 7.04a1.003 1.003 0 0 0 0-1.42L18.37 3.29a1.003 1.003 0 0 0-1.42 0L15.13 5.1l3.75 3.75 1.83-1.81z"
+                ></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="secondary preview-corner-button cancel-preview-button"
+              on:click={discardCaptured}
+              disabled={uploadingImage}
+              aria-label="Cancel captured image"
+              title="Cancel and return to live camera"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="ok preview-corner-button accept-preview-button"
+              on:click={acceptCapturedImage}
+              disabled={!capturedFile || uploadingImage}
+              aria-label="Accept captured image"
+              title="Accept and continue to stage 3"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
+              </svg>
+            </button>
+          </div>
         {/if}
       </div>
     {:else}
@@ -826,42 +906,55 @@
           disableRemotePlayback
           class="preview"
         ></video>
-        <button
-          type="button"
-          class="secondary preview-corner-button switch-camera-overlay-button"
-          on:click={switchCamera}
-          disabled={!stream || switchingCamera}
-          aria-label={switchingCamera ? 'Switching camera' : 'Switch camera'}
-          title={switchingCamera ? 'Switching camera...' : 'Switch camera'}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              d="M12 12c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm9-7h-3.17l-1.84-2H8.01L6.17 5H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 14H3V7h4.05l1.83-2h6.24l1.83 2H21v12z"
-            ></path>
-          </svg>
-        </button>
+        <div class="overlay-control-stack">
+          <button
+            type="button"
+            class="secondary preview-corner-button switch-camera-overlay-button"
+            on:click={switchCamera}
+            disabled={!stream || switchingCamera || uploadingImage}
+            aria-label={switchingCamera ? 'Switching camera' : 'Switch camera'}
+            title={switchingCamera ? 'Switching camera...' : 'Switch camera'}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 12c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm9-7h-3.17l-1.84-2H8.01L6.17 5H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 14H3V7h4.05l1.83-2h6.24l1.83 2H21v12z"
+              ></path>
+            </svg>
+          </button>
+          <label
+            class="secondary overlay-icon-button upload-overlay-button"
+            class:disabled={uploadingImage}
+            aria-label="Upload image file"
+            title="Upload image file"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 20h14v-2H5v2zm7-18-5.5 5.5 1.42 1.42L11 5.84V16h2V5.84l3.08 3.08 1.42-1.42L12 2z"></path>
+            </svg>
+            <input
+              bind:this={uploadInputEl}
+              class="upload-overlay-input"
+              type="file"
+              accept="image/*"
+              on:change={onFileChange}
+              disabled={uploadingImage}
+            />
+          </label>
+          <button
+            type="button"
+            class="overlay-icon-button capture-overlay-button"
+            on:click={captureFromWebcam}
+            disabled={!stream || uploadingImage}
+            aria-label="Capture image"
+            title="Capture image (Space or Enter)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
+            </svg>
+          </button>
+        </div>
+        <p class="capture-hint-text">Press enter to capture the image</p>
       </div>
     {/if}
-
-    <div style="display:flex; gap:0.5rem; margin-top:0.8rem; flex-wrap:wrap;">
-      <button type="button" on:click={previewUrl ? discardCaptured : captureFromWebcam} disabled={cropEditMode}>
-        {previewUrl ? 'Discard image' : 'Capture'}
-      </button>
-      <label
-        class="secondary upload-file-label"
-        class:disabled={cropEditMode}
-        style="display:inline-block; margin:0; padding:0.45rem 0.7rem; border-radius:8px; border:1px solid var(--border); cursor:pointer;"
-      >
-        Upload File
-        <input type="file" accept="image/*" on:change={onFileChange} style="display:none;" disabled={cropEditMode} />
-      </label>
-    </div>
-
-    <form on:submit={submitImage} style="margin-top:0.8rem;">
-      <button type="submit" disabled={!selectedCase || !capturedFile || cropEditMode}>
-        Upload image for selected case
-      </button>
-    </form>
 
     {#if captureMessage}
       <p>{captureMessage}</p>
@@ -942,60 +1035,87 @@
     overflow: hidden;
   }
 
-  .preview-corner-button {
+  .overlay-control-stack {
     position: absolute;
     top: 0.65rem;
     right: 0.65rem;
-    width: 2rem;
-    height: 2rem;
-    padding: 0.35rem;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+  }
+
+  .preview-corner-button,
+  .overlay-icon-button {
+    width: 2.45rem;
+    height: 2.45rem;
+    border-radius: 999px;
+    padding: 0.45rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 999px;
-    z-index: 3;
+    border: 1px solid transparent;
     backdrop-filter: blur(2px);
+    cursor: pointer;
   }
 
-  .edit-crop-button {
+  .preview-corner-button svg,
+  .overlay-icon-button svg {
+    width: 1.2rem;
+    height: 1.2rem;
+    fill: currentColor;
+  }
+
+  .accept-preview-button,
+  .confirm-crop-button,
+  .capture-overlay-button {
+    background: #2a9d8f;
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .upload-overlay-button {
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--text);
+    border-color: var(--border);
+    position: relative;
+  }
+
+  .upload-overlay-input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .upload-overlay-button.disabled {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .capture-hint-text {
+    position: absolute;
+    left: 0.7rem;
+    right: 0.7rem;
+    bottom: 0.7rem;
+    margin: 0;
+    padding: 0.32rem 0.5rem;
+    border-radius: 8px;
+    background: rgba(10, 10, 10, 0.58);
+    color: #f4f7f7;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
     opacity: 0;
     pointer-events: none;
     transition: opacity 120ms ease-in-out;
   }
 
-  .captured-preview:hover .edit-crop-button,
-  .captured-preview:focus-within .edit-crop-button {
+  .camera-feed:hover .capture-hint-text,
+  .camera-feed:focus-within .capture-hint-text {
     opacity: 1;
-    pointer-events: auto;
-  }
-
-  .confirm-crop-button {
-    pointer-events: auto;
-  }
-
-  .confirm-crop-button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .cancel-crop-button {
-    right: 3.1rem;
-    pointer-events: auto;
-  }
-
-  .preview-corner-button svg {
-    width: 1rem;
-    height: 1rem;
-    fill: currentColor;
-  }
-
-  .switch-camera-overlay-button {
-    pointer-events: auto;
-  }
-
-  .switch-camera-overlay-button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
 
   .crop-overlay {
@@ -1047,10 +1167,5 @@
     left: 0;
     bottom: 0;
     transform: translate(-50%, 50%);
-  }
-
-  .upload-file-label.disabled {
-    opacity: 0.6;
-    pointer-events: none;
   }
 </style>
