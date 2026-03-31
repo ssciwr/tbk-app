@@ -1,0 +1,18 @@
+[Unit]
+Description=Teddy Hospital App (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Change this to the repository path on your server.
+WorkingDirectory=/home/dkempf/new-tbk
+ExecStart=/usr/bin/docker compose -f compose.prod.yaml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f compose.prod.yaml down
+TimeoutStartSec=0
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
