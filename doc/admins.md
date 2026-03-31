@@ -8,11 +8,11 @@ Currently these are the requirements for running the application.
 	* 8 GB RAM should be enough
 	* Needs to be accessible from both the network where the hospital is operating and from the GPU runner
 * Access to a persistently available, supported Storage backend. This is currently limited to a Seafile instance (in Heidelberg: [HeiBox](https://heibox.uni-heidelberg.de))
-* An NVidia GPU with 80GB VRAM
+* An NVidia GPU with 80GB VRAM on some machine - not directly on above VM!
 
 If you do not have 80GB of VRAM, there is possibilities to split this up onto multiple GPUs or trim down, but they might require work on the code or might affect generation results:
 * You can switch to a cheaper/quantized VLM
-* You can use a cloud-hosted VLM, any OpenAI-compatible API works
+* You can use a cloud-hosted VLM, any OpenAI-compatible API works. This will also be much more cost effective - we did not do it, because we ran into problems with rate limiting on the mistral.ai free tier.
 * You can distribute VLM and generation to different devices
 * You could do Chroma-based X-Ray Style Adaptation (removing the necessity to load two different image generation models)
 
@@ -25,12 +25,12 @@ git clone https://github.com/ssciwr/tbk-app.git
 cd tbk-app
 ```
 
-Then, adapt the configuration files to your needs:
+Then, copy and adapt the configuration files to your needs:
 ```bash
+mv .env.example .env
 mv ./frontend/.env.example ./frontend/.env
 mv ./backend/.env.example ./backend/.env
 ```
-
 
 ```bash
 docker compose -f compose.prod.yaml up --build
@@ -53,11 +53,12 @@ python -m pip install ./runner
 python -m pip install -r runner/requirements-chroma.txt
 ```
 
-Next we need to ensure that we have all required models downloaded.
+Next we need to ensure that we have all required models downloaded and placed in `runner/assets`.
 
-```bash
-tbd
-```
+* `chroma-unlocked-v44-detail-calibrated.safetensors` from [lodestones/Chroma](https://huggingface.co/lodestones/Chroma/tree/main). Note that in the meantime, the Chroma-1 model has released and it is not strictly required to load from a checkpoint anymore. However, we did not want to change the pipeline we have had good experiences with without detailed analysis of the results.
+* `Hyper-Chroma-Turbo-Alpha-16steps-lora.safetensors` from https://www.runninghub.ai/model/public/1931558060911996929
+* `DD-xray-v1.safetensors` from https://civitai.com/models/231655/xray-xl-lora
+
 
 You can then run the generation service with the `tbk-runner` executable. An overview of options:
 
@@ -101,4 +102,13 @@ Additional storage backends (e.g. NextCloud, S3 Buckets etc.) are possible, but 
 
 ### Setup of the Seafile backend
 
-TODO
+You need to configure `backend/.env` to point to the correct SeaFile instance. The following two libraries are needed:
+
+* `SEAFILE_URL`
+* `SEAFILE_LIBRARY_NAME`
+
+Additionally you need to provide one of the following:
+
+* `SEAFILE_REPO_TOKEN` (preferred if your Seafile API runs version >= 12): This can be generated directly in the UI library settings.
+* `SEAFILE_ACCOUNT_TOKEN` (preferred for Seafile API version 11): This can be generated directly in the UI account settings ("Web API Auth Token")
+* `SEAFILE_USERNAME`/`SEAFILE_PASSWORD`: Discouraged due to potential leaking of credentials.
