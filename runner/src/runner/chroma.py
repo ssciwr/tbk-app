@@ -49,8 +49,8 @@ else:
 #
 
 # General input handling
-IMAGE_WIDTH = 1024
-IMAGE_HEIGHT = 1024
+IMAGE_WIDTH = 512
+IMAGE_HEIGHT = 512
 MONOCHROME_BACKGROUND_PATH = "monochrome_background.png"
 
 # VLM analysis
