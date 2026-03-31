@@ -54,7 +54,7 @@ There is three separate services that need to be setup:
 
 There is currently no Docker setup for the GPU runner code. An installation of Python (tested version: `3.11`) is required, preferrably in an isolated environment.
 
-```bash[TBK Prompt](:/f0218841ae78489488999ec4de5086da)
+```bash
 git clone https://github.com/ssciwr/tbk-app.git
 cd tbk-app
 python -m pip install ./runner
