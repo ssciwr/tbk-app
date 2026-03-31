@@ -38,11 +38,11 @@ async def review_pending(
                     "broken_bone": case.broken_bone,
                 },
                 "original_url": str(
-                    request.url_for("review_original", case_id=case.case_id)
+                    request.app.url_path_for("review_original", case_id=case.case_id)
                 ),
                 "result_urls": [
                     str(
-                        request.url_for(
+                        request.app.url_path_for(
                             "review_result", case_id=case.case_id, index=index
                         )
                     )

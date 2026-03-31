@@ -45,15 +45,18 @@
     if (url.startsWith('data:') || url.startsWith('blob:')) {
       return url;
     }
-
-    const response = await authedFetchUrl(url);
-    if (!response.ok) {
+    try {
+      const response = await authedFetchUrl(url);
+      if (!response.ok) {
+        return null;
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      objectUrls.push(objectUrl);
+      return objectUrl;
+    } catch {
       return null;
     }
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    objectUrls.push(objectUrl);
-    return objectUrl;
   }
 
   async function hydrateCaseImages(

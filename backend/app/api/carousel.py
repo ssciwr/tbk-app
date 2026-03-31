@@ -30,10 +30,12 @@ async def carousel_list(
                     "qr_content": item.owner_ref,
                 },
                 "xray_url": str(
-                    request.url_for("carousel_image", index=idx, kind="xray")
+                    request.app.url_path_for("carousel_image", index=idx, kind="xray")
                 ),
                 "original_url": str(
-                    request.url_for("carousel_image", index=idx, kind="original")
+                    request.app.url_path_for(
+                        "carousel_image", index=idx, kind="original"
+                    )
                 ),
                 "approved_at": item.approved_at.isoformat(),
             }

@@ -35,7 +35,9 @@ async def fracture_pending(
                     "animal_type": case.metadata.animal_type,
                 },
                 "selected_url": str(
-                    request.url_for("fracture_selected_result", case_id=case.case_id)
+                    request.app.url_path_for(
+                        "fracture_selected_result", case_id=case.case_id
+                    )
                 ),
             }
         )
