@@ -6,8 +6,7 @@ Photo des Kuscheltiers und erstellt dann mittels generativer KI ein Röntgenbild
 das Resultat hier zum Download für Sie.
 
 Wir halten die Bilder hier für einige Zeit vor, wir bitten Sie jedoch diese herunterzuladen,
-wenn Sie sie dauerhaft sichern wollen. Bitte beachten Sie, dass die Bilder lizenzrechtlich
-nur für den privaten Gebrauch bestimmt sind (Einschränkung der verwendeten Modelle).
+wenn Sie sie dauerhaft sichern wollen.
 
 Unser "Röntgengerät" wurde in einer Kooperation mit Studierenden der Informatik und dem
 Scientific Software Center der Universität Heidelberg entwickelt. Wenn Sie ein technisches
