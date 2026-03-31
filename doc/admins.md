@@ -28,12 +28,20 @@ cd tbk-app
 Then, copy and adapt the configuration files to your needs:
 ```bash
 mv .env.example .env
-mv ./frontend/.env.example ./frontend/.env
 mv ./backend/.env.example ./backend/.env
 ```
 
+Then, start the service:
 ```bash
-docker compose -f compose.prod.yaml up --build
+docker compose -f compose.prod.yaml up -d --build
+```
+
+Optionally, you can register this as a system.d service by adjusting [teddy-app.service](teddy-app.service) and placing it in `/etc/systemd/system/teddy-app.service`. Then, run:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now teddy-app.service
+sudo systemctl status teddy-app.service
 ```
 
 ## GPU Runner Setup
