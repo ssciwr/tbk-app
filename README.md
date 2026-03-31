@@ -23,8 +23,11 @@ Documentation exists for a variety of relevant personas:
 
 ## License information
 
-The web app, as well as the runner are provided under the terms of the MIT license. Additional licensing constraints arise from the used models:
+The web app, as well as the runner are provided under the terms of the MIT license.
 
-* [SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0): CreativeML Open RAIL-M License (allowing free use with certain guard rails. Note that we do not interpret our app to provide "medical-result" interpretation, as it is very clearly only intended for plush toys, which do not have bones)
+**Please note that this application is only meant to be used on plush toys. Usage with other images might violate the licensing terms of the used models.**
+
+Licenses of the used models:
+* [SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0): CreativeML Open RAIL-M License
 * [Chroma](https://huggingface.co/lodestones/Chroma/tree/main): Apache 2.0 License
 * [X-Ray XL LoRA](civitai.com/models/231655/xray-xl-lora): See civit.ai for exact terms
