@@ -117,7 +117,7 @@
 <div class="app-shell">
   {#if !isCarouselShowcase}
     <header class="pipeline-header">
-      <div class="pipeline-track">
+      <div class="pipeline-track pipeline-track-desktop">
         {#each pipelineStages as stage, index}
           {#if stage.enabled}
             <a
@@ -137,6 +137,92 @@
           {/if}
           {#if index < pipelineStages.length - 1}
             <span class="stage-arrow" aria-hidden="true">→</span>
+          {/if}
+        {/each}
+      </div>
+      <div class="pipeline-track-mobile" aria-label="Pipeline stages">
+        {#each pipelineStages as stage, index}
+          {@const active = isActive($page.url.pathname, stage.href)}
+          {#if stage.enabled}
+            <a
+              href={stage.href}
+              class="stage-icon-chip"
+              class:active={active}
+              aria-current={active ? 'page' : undefined}
+              title={`Stage ${stage.stage}: ${stage.label}`}
+              aria-label={`Stage ${stage.stage}: ${stage.label}`}
+            >
+              <span class="stage-icon-glyph" aria-hidden="true">
+                {#if stage.key === 'patient-data'}
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="8" r="3"></circle>
+                    <path d="M6.5 19c0-3.3 2.5-6 5.5-6s5.5 2.7 5.5 6"></path>
+                  </svg>
+                {:else if stage.key === 'camera'}
+                  <svg viewBox="0 0 24 24">
+                    <rect x="4" y="7" width="16" height="12" rx="2"></rect>
+                    <path d="M9 7l1.3-2h3.4L15 7"></path>
+                    <circle cx="12" cy="13" r="3"></circle>
+                  </svg>
+                {:else if stage.key === 'review'}
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="11" cy="11" r="5.5"></circle>
+                    <path d="m16 16 4 4"></path>
+                  </svg>
+                {:else if stage.key === 'fracture'}
+                  <svg viewBox="0 0 24 24">
+                    <path d="M4 20h4l10-10-4-4L4 16v4z"></path>
+                    <path d="m13 7 4 4"></path>
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8"></circle>
+                    <path d="m8.5 12.5 2.5 2.5 4.5-5"></path>
+                  </svg>
+                {/if}
+              </span>
+            </a>
+          {:else}
+            <span
+              class="stage-icon-chip disabled"
+              class:active={active}
+              aria-disabled="true"
+              title={`Stage ${stage.stage}: ${stage.label} (disabled)`}
+              aria-label={`Stage ${stage.stage}: ${stage.label} (disabled)`}
+            >
+              <span class="stage-icon-glyph" aria-hidden="true">
+                {#if stage.key === 'patient-data'}
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="8" r="3"></circle>
+                    <path d="M6.5 19c0-3.3 2.5-6 5.5-6s5.5 2.7 5.5 6"></path>
+                  </svg>
+                {:else if stage.key === 'camera'}
+                  <svg viewBox="0 0 24 24">
+                    <rect x="4" y="7" width="16" height="12" rx="2"></rect>
+                    <path d="M9 7l1.3-2h3.4L15 7"></path>
+                    <circle cx="12" cy="13" r="3"></circle>
+                  </svg>
+                {:else if stage.key === 'review'}
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="11" cy="11" r="5.5"></circle>
+                    <path d="m16 16 4 4"></path>
+                  </svg>
+                {:else if stage.key === 'fracture'}
+                  <svg viewBox="0 0 24 24">
+                    <path d="M4 20h4l10-10-4-4L4 16v4z"></path>
+                    <path d="m13 7 4 4"></path>
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="8"></circle>
+                    <path d="m8.5 12.5 2.5 2.5 4.5-5"></path>
+                  </svg>
+                {/if}
+              </span>
+            </span>
+          {/if}
+          {#if index < pipelineStages.length - 1}
+            <span class="stage-icon-arrow" aria-hidden="true">→</span>
           {/if}
         {/each}
       </div>
@@ -199,6 +285,13 @@
     flex-wrap: wrap;
   }
 
+  .pipeline-track-mobile {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+  }
+
   .stage-chip {
     min-width: 140px;
     border: 1px solid var(--border);
@@ -250,6 +343,65 @@
     user-select: none;
   }
 
+  .stage-icon-chip {
+    width: 2.35rem;
+    height: 2.35rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: #ffffff;
+    box-shadow: 0 4px 14px rgba(33, 46, 48, 0.07);
+    color: #445860;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+  }
+
+  .stage-icon-chip:hover {
+    text-decoration: none;
+    border-color: #9ab4b5;
+  }
+
+  .stage-icon-chip.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(14, 124, 123, 0.18);
+    background: #f4fbfb;
+    color: var(--accent);
+  }
+
+  .stage-icon-chip.disabled {
+    opacity: 0.5;
+    background: #f1f3f4;
+    border-style: dashed;
+    box-shadow: none;
+    color: #5f676f;
+  }
+
+  .stage-icon-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.2rem;
+    height: 1.2rem;
+  }
+
+  .stage-icon-glyph svg {
+    width: 100%;
+    height: 100%;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .stage-icon-arrow {
+    color: #5f7377;
+    font-size: 0.85rem;
+    line-height: 1;
+    user-select: none;
+  }
+
   .layout-footer {
     max-width: 1100px;
     margin: 0 auto;
@@ -280,16 +432,14 @@
   }
 
   @media (max-width: 900px) {
-    .pipeline-track {
-      justify-content: flex-start;
-    }
-
-    .stage-arrow {
+    .pipeline-track-desktop {
       display: none;
     }
 
-    .stage-chip {
-      width: 100%;
+    .pipeline-track-mobile {
+      display: flex;
+      justify-content: center;
+      flex-wrap: nowrap;
     }
 
     .layout-footer .logout-link {
