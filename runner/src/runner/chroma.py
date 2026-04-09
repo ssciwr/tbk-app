@@ -173,6 +173,7 @@ def _run_first_pass_remove(
     *,
     session: Any,
     alpha_matting: bool,
+    bgcolor: tuple[int, int, int, int] | None = None,
 ) -> Image.Image | bytes:
     _require_chroma_dependencies()
     assert remove is not None
@@ -186,7 +187,7 @@ def _run_first_pass_remove(
         alpha_matting_erode_size=10,
         only_mask=False,
         post_process_mask=False,
-        bgcolor=(0, 0, 0, 255),
+        bgcolor=bgcolor,
     )
 
 
@@ -231,6 +232,7 @@ def _remove_first_pass_subprocess_worker(
                 image,
                 session=active_session,
                 alpha_matting=True,
+                bgcolor=None,
             )
 
         if isinstance(output, Image.Image):
@@ -509,27 +511,9 @@ def remove_background_first_pass(image: Image.Image, session: Any) -> Image.Imag
             image,
             session=session,
             alpha_matting=False,
+            bgcolor=None,
         )
 
-    if isinstance(output, Image.Image):
-        return output.convert("RGB")
-    return Image.open(io.BytesIO(output)).convert("RGB")
-
-
-def remove_background_second_pass(image: Image.Image, session: Any) -> Image.Image:
-    _require_chroma_dependencies()
-    assert remove is not None
-
-    output = remove(
-        image,
-        session=session,
-        alpha_matting=False,
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=10,
-        alpha_matting_erode_size=10,
-        only_mask=False,
-        post_process_mask=False,
-    )
     if isinstance(output, Image.Image):
         return output.convert("RGBA")
     return Image.open(io.BytesIO(output)).convert("RGBA")
@@ -766,7 +750,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._dtype: Any = None
         self._torch: Any = None
         self._first_pass_session: Any = None
-        self._second_pass_session: Any = None
         self._pipe: Any = None
         self._sdxl_pipe: Any = None
 
@@ -803,7 +786,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._device = device
         self._dtype = dtype
         self._first_pass_session = new_session(model_name="u2net")
-        self._second_pass_session = new_session(model_name="isnet-general-use")
         self._pipe = load_pipeline(dtype=dtype)
         self._pipe.to(device)
         self._sdxl_pipe = load_sdxl_style_pipeline(dtype=dtype, device=device)
@@ -815,7 +797,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             or self._pipe is None
             or self._sdxl_pipe is None
             or self._first_pass_session is None
-            or self._second_pass_session is None
         ):
             raise RuntimeError(
                 "Chroma workflow is not initialized. setup() must be called first."
@@ -840,7 +821,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         assert self._pipe is not None
         assert self._sdxl_pipe is not None
         assert self._first_pass_session is not None
-        assert self._second_pass_session is not None
         workflow_parameters = parameters or {}
         animal_type_hint = _normalize_animal_type_hint(
             workflow_parameters.get("animal_type")
@@ -864,15 +844,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             debug_dir,
             "02_first_pass_no_background.png",
             first_rembg_image,
-        )
-        second_rembg_image = remove_background_second_pass(
-            first_rembg_image,
-            session=self._second_pass_session,
-        )
-        _write_debug_image(
-            debug_dir,
-            "03_second_pass_no_background.png",
-            second_rembg_image,
         )
 
         normalized_vlm_server = normalize_vlm_base_url(self.vlm_server)
@@ -902,8 +873,8 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         logging.debug("VLM generated prompt: %s", final_prompt)
         _write_debug_prompt(debug_dir, final_prompt)
 
-        init_image = add_monochrome_background(second_rembg_image)
-        _write_debug_image(debug_dir, "04_monochrome_init_image.png", init_image)
+        init_image = add_monochrome_background(first_rembg_image)
+        _write_debug_image(debug_dir, "03_monochrome_init_image.png", init_image)
         for index in range(max(num_images, 0)):
             generator = self._new_generator()
             generated = self._pipe(
@@ -919,7 +890,7 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             ).images[0]
             _write_debug_image(
                 debug_dir,
-                f"05_chroma_generated_{index + 1:02d}.png",
+                f"04_chroma_generated_{index + 1:02d}.png",
                 generated,
             )
 
@@ -933,13 +904,13 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             ).images[0]
             _write_debug_image(
                 debug_dir,
-                f"06_sdxl_rewrite_{index + 1:02d}.png",
+                f"05_sdxl_rewrite_{index + 1:02d}.png",
                 sdxl_result,
             )
             final_image = sdxl_result.convert("L").convert("RGB")
             _write_debug_image(
                 debug_dir,
-                f"07_final_output_{index + 1:02d}.png",
+                f"06_final_output_{index + 1:02d}.png",
                 final_image,
             )
             yield final_image

@@ -222,7 +222,8 @@ def test_chroma_first_pass_uses_watchdog_output_when_available(
         session=object(),
     )
 
-    assert result.getpixel((0, 0)) == (7, 11, 13)
+    assert result.mode == "RGBA"
+    assert result.getpixel((0, 0)) == (7, 11, 13, 255)
 
 
 def test_chroma_first_pass_retries_without_alpha_matting_when_watchdog_fails(
@@ -248,7 +249,160 @@ def test_chroma_first_pass_retries_without_alpha_matting_when_watchdog_fails(
     )
 
     assert calls == [False]
-    assert result.getpixel((0, 0)) == (0, 255, 0)
+    assert result.mode == "RGBA"
+    assert result.getpixel((0, 0)) == (0, 255, 0, 255)
+
+
+def test_chroma_setup_initializes_only_single_rembg_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    workflow = chroma_module.ChromaWorkflow()
+    workflow.configure(
+        vlm_server="http://vlm.local:8001",
+        vlm_model_name="gpt-4.1-mini",
+    )
+
+    session_models: list[str] = []
+    fake_sdxl_pipe = object()
+    monkeypatch.setattr(chroma_module, "_CHROMA_IMPORT_ERROR", None)
+    monkeypatch.setattr(chroma_module, "torch", object())
+    monkeypatch.setattr(
+        chroma_module,
+        "pick_device_dtype",
+        lambda *_args, **_kwargs: ("cpu", "float32"),
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "new_session",
+        lambda *, model_name: session_models.append(model_name) or object(),
+    )
+
+    class _PipelineWithTo:
+        def to(self, _device: str) -> "_PipelineWithTo":
+            return self
+
+    monkeypatch.setattr(
+        chroma_module,
+        "load_pipeline",
+        lambda **_kwargs: _PipelineWithTo(),
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "load_sdxl_style_pipeline",
+        lambda **_kwargs: fake_sdxl_pipe,
+    )
+
+    workflow.setup()
+
+    assert session_models == ["u2net"]
+
+
+def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    workflow = chroma_module.ChromaWorkflow()
+    workflow.vlm_server = "http://vlm.local:8001"
+    workflow.vlm_model_name = "gpt-4.1-mini"
+    workflow._torch = object()
+    workflow._device = "cpu"
+    workflow._first_pass_session = object()
+
+    class _FakeGeneratorTorch:
+        @staticmethod
+        def Generator(device: str) -> Any:
+            class _Generator:
+                def manual_seed(self, _seed: int) -> str:
+                    return f"generator:{device}"
+
+            return _Generator()
+
+    workflow._torch = _FakeGeneratorTorch()
+
+    first_pass_image = Image.new("RGBA", (1024, 1024), color=(10, 20, 30, 40))
+    monochrome_input: list[Image.Image] = []
+    debug_images: list[str] = []
+
+    def _fake_first_pass(_image: Image.Image, session: Any) -> Image.Image:
+        assert session is workflow._first_pass_session
+        return first_pass_image
+
+    def _fake_add_background(image: Image.Image) -> Image.Image:
+        monochrome_input.append(image)
+        return Image.new("RGB", (1024, 1024), color=(1, 2, 3))
+
+    def _fake_second_pass(*_args: Any, **_kwargs: Any) -> Image.Image:
+        raise AssertionError("second rembg pass should not run")
+
+    class _FakePipeline:
+        def __call__(self, **kwargs: Any) -> Any:
+            assert kwargs["image"].getpixel((0, 0)) == (1, 2, 3)
+            return type(
+                "_Result",
+                (),
+                {"images": [Image.new("RGB", (1024, 1024), color=(4, 5, 6))]},
+            )()
+
+    class _FakeSdxlPipeline:
+        def __call__(self, **kwargs: Any) -> Any:
+            assert kwargs["image"].getpixel((0, 0)) == (4, 5, 6)
+            return type(
+                "_Result",
+                (),
+                {"images": [Image.new("RGB", (1024, 1024), color=(7, 8, 9))]},
+            )()
+
+    workflow._pipe = _FakePipeline()
+    workflow._sdxl_pipe = _FakeSdxlPipeline()
+
+    monkeypatch.setattr(chroma_module, "remove_background_first_pass", _fake_first_pass)
+    monkeypatch.setattr(
+        chroma_module, "add_monochrome_background", _fake_add_background
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "_write_debug_image",
+        lambda _dir, name, _img: debug_images.append(name),
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "_write_debug_prompt",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "generate_prompt_with_openai_compatible",
+        lambda **_kwargs: "generated prompt",
+    )
+    monkeypatch.setattr(
+        chroma_module,
+        "remove_background_second_pass",
+        _fake_second_pass,
+        raising=False,
+    )
+
+    outputs = list(
+        workflow.generate(
+            Image.new("RGB", (64, 64), color=(9, 9, 9)),
+            parameters={"animal_type": "fox"},
+            num_images=1,
+            debug=False,
+        )
+    )
+
+    assert len(monochrome_input) == 1
+    assert monochrome_input[0] is first_pass_image
+    assert debug_images == [
+        "01_resized_input.png",
+        "02_first_pass_no_background.png",
+        "03_monochrome_init_image.png",
+        "04_chroma_generated_01.png",
+        "05_sdxl_rewrite_01.png",
+        "06_final_output_01.png",
+    ]
+    assert len(outputs) == 1
+    assert outputs[0].mode == "RGB"
 
 
 def test_dummy_workflow_generate_yields_seed_varied_images(monkeypatch) -> None:
