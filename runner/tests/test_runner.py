@@ -210,7 +210,8 @@ def test_chroma_generate_prompt_with_mistral_uploads_completes_and_deletes(
     class _FakeFiles:
         def upload(self, *, file: dict[str, Any], purpose: str) -> Any:
             captured["upload_file_name"] = file["file_name"]
-            captured["upload_payload_prefix"] = file["content"].read(8)
+            captured["upload_payload_prefix"] = file["content"][:8]
+            captured["upload_content_type"] = type(file["content"])
             captured["upload_purpose"] = purpose
             return type("_Upload", (), {"id": "file-123"})()
 
@@ -247,6 +248,7 @@ def test_chroma_generate_prompt_with_mistral_uploads_completes_and_deletes(
     assert captured["api_key"] == "test-key"
     assert captured["upload_file_name"] == "vlm_input.png"
     assert captured["upload_payload_prefix"].startswith(b"\x89PNG")
+    assert captured["upload_content_type"] is bytes
     assert captured["upload_purpose"] == chroma_module.VLM_FILE_PURPOSE
     assert captured["signed_url_file_id"] == "file-123"
     assert captured["deleted_file_ids"] == ["file-123"]

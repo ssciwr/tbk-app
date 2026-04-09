@@ -655,7 +655,7 @@ def generate_prompt_with_mistral(
     assert Mistral is not None
 
     client = Mistral(api_key=cleaned_api_key)
-    image_stream = io.BytesIO(_serialize_image_to_png_bytes(image))
+    image_bytes = _serialize_image_to_png_bytes(image)
     uploaded_file_id: str | None = None
     stage = "uploading image"
 
@@ -663,7 +663,7 @@ def generate_prompt_with_mistral(
         uploaded_file = client.files.upload(
             file={
                 "file_name": "vlm_input.png",
-                "content": image_stream,
+                "content": image_bytes,
             },
             purpose=VLM_FILE_PURPOSE,
         )
@@ -692,7 +692,6 @@ def generate_prompt_with_mistral(
             f"Mistral VLM request failed while {stage} (model={model!r})."
         ) from exc
     finally:
-        image_stream.close()
         if uploaded_file_id is not None:
             try:
                 client.files.delete(file_id=uploaded_file_id)
