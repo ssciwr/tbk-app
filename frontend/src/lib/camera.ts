@@ -128,27 +128,34 @@ function getOtherProfile(profile: CameraProfile): CameraProfile {
   return profile === 'patient-data' ? 'camera' : 'patient-data';
 }
 
-function baseSquareConstraints(): Pick<
+function preferredSquareDimension(profile: CameraProfile): number {
+  return profile === 'patient-data' ? 640 : 1080;
+}
+
+function baseSquareConstraints(
+  profile: CameraProfile
+): Pick<
   MediaTrackConstraints,
   'aspectRatio' | 'width' | 'height'
 > {
+  const dimension = preferredSquareDimension(profile);
   return {
     aspectRatio: { ideal: 1 },
-    width: { ideal: 1080 },
-    height: { ideal: 1080 }
+    width: { ideal: dimension },
+    height: { ideal: dimension }
   };
 }
 
-function preferredConstraints(): MediaTrackConstraints {
+function preferredConstraints(profile: CameraProfile): MediaTrackConstraints {
   return {
-    ...baseSquareConstraints(),
+    ...baseSquareConstraints(profile),
     facingMode: { ideal: 'environment' }
   };
 }
 
-function exactDeviceConstraints(deviceId: string): MediaTrackConstraints {
+function exactDeviceConstraints(profile: CameraProfile, deviceId: string): MediaTrackConstraints {
   return {
-    ...baseSquareConstraints(),
+    ...baseSquareConstraints(profile),
     deviceId: { exact: deviceId }
   };
 }
@@ -215,7 +222,7 @@ export async function startProfiledCamera(
 
   if (savedDeviceId) {
     try {
-      stream = await openStream(exactDeviceConstraints(savedDeviceId));
+      stream = await openStream(exactDeviceConstraints(profile, savedDeviceId));
     } catch (error) {
       if (isStaleDeviceError(error)) {
         clearStoredDeviceId(profile);
@@ -229,7 +236,7 @@ export async function startProfiledCamera(
       try {
         const alternativeDeviceId = await chooseAlternativeDeviceId(otherProfileDeviceId);
         if (alternativeDeviceId) {
-          stream = await openStream(exactDeviceConstraints(alternativeDeviceId));
+          stream = await openStream(exactDeviceConstraints(profile, alternativeDeviceId));
         }
       } catch {
         // Continue with generic fallbacks.
@@ -239,18 +246,18 @@ export async function startProfiledCamera(
 
   if (!stream) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false
-      });
+      stream = await openStream(preferredConstraints(profile));
     } catch {
-      // Try environment preference fallback.
+      // Continue with generic fallback.
     }
   }
 
   if (!stream) {
     try {
-      stream = await openStream(preferredConstraints());
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false
+      });
     } catch {
       // Handled below.
     }
@@ -263,7 +270,7 @@ export async function startProfiledCamera(
   const track = stream.getVideoTracks()[0];
   if (track) {
     try {
-      await track.applyConstraints(baseSquareConstraints());
+      await track.applyConstraints(baseSquareConstraints(profile));
     } catch {
       // Not all cameras/browsers support these constraints.
     }
@@ -332,11 +339,11 @@ export async function switchProfiledCamera(
     }
 
     try {
-      const nextStream = await openStream(exactDeviceConstraints(candidate));
+      const nextStream = await openStream(exactDeviceConstraints(profile, candidate));
       const track = nextStream.getVideoTracks()[0];
       if (track) {
         try {
-          await track.applyConstraints(baseSquareConstraints());
+          await track.applyConstraints(baseSquareConstraints(profile));
         } catch {
           // Not all cameras/browsers support these constraints.
         }
