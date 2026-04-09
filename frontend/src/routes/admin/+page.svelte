@@ -3,64 +3,124 @@
   import { authedFetch } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
 
+  type QRJobStatus = 'idle' | 'starting' | 'running' | 'done' | 'failed';
+  type QRJobCreateResponse = {
+    job_id: string;
+    status: Exclude<QRJobStatus, 'idle' | 'starting'>;
+  };
+  type QRJobStateResponse = {
+    status: Exclude<QRJobStatus, 'idle' | 'starting'>;
+    progress: number;
+  };
+
+  const POLL_INTERVAL_MS = 1000;
+
   let count = 50;
   let jobId = '';
-  let status = 'idle';
+  let status: QRJobStatus = 'idle';
   let progress = 0;
   let message = '';
-  let pollHandle: ReturnType<typeof setInterval> | null = null;
+  let pollToken = 0;
+  let activePollController: AbortController | null = null;
 
   async function startJob(): Promise<void> {
-    message = '';
-    const response = await authedFetch('/api/admin/qr-jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count })
-    });
-
-    if (!response.ok) {
-      message = 'Failed to start QR generation job.';
-      return;
-    }
-
-    const data = await response.json();
-    jobId = data.job_id;
-    status = data.status;
+    stopPolling();
+    jobId = '';
+    status = 'starting';
     progress = 0;
-    startPolling();
+    message = '';
+
+    try {
+      const response = await authedFetch('/api/admin/qr-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count })
+      });
+
+      if (!response.ok) {
+        status = 'idle';
+        message = 'Failed to start QR generation job.';
+        return;
+      }
+
+      const data = (await response.json()) as QRJobCreateResponse;
+      jobId = data.job_id;
+      status = data.status;
+      startPolling(data.job_id);
+    } catch {
+      status = 'idle';
+      message = 'Failed to start QR generation job.';
+    }
   }
 
-  async function fetchJobState(): Promise<void> {
-    if (!jobId) {
-      return;
-    }
-
-    const response = await authedFetch(`/api/admin/qr-jobs/${jobId}`);
+  async function fetchJobState(requestedJobId: string, signal: AbortSignal): Promise<boolean> {
+    const response = await authedFetch(`/api/admin/qr-jobs/${requestedJobId}`, {
+      cache: 'no-store',
+      signal
+    });
     if (!response.ok) {
+      if (requestedJobId !== jobId || signal.aborted) {
+        return false;
+      }
       message = 'Failed to poll QR job state.';
       stopPolling();
-      return;
+      return false;
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as QRJobStateResponse;
+    if (requestedJobId !== jobId || signal.aborted) {
+      return false;
+    }
+
     status = data.status;
     progress = data.progress;
 
     if (status === 'done' || status === 'failed') {
       stopPolling();
+      return false;
+    }
+
+    return true;
+  }
+
+  async function pollJob(requestedJobId: string, token: number): Promise<void> {
+    while (jobId === requestedJobId && pollToken === token) {
+      const controller = new AbortController();
+      activePollController = controller;
+
+      try {
+        const shouldContinue = await fetchJobState(requestedJobId, controller.signal);
+        if (!shouldContinue || jobId !== requestedJobId || pollToken !== token) {
+          return;
+        }
+      } catch {
+        if (controller.signal.aborted || jobId !== requestedJobId || pollToken !== token) {
+          return;
+        }
+        message = 'Failed to poll QR job state.';
+        stopPolling();
+        return;
+      } finally {
+        if (activePollController === controller) {
+          activePollController = null;
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
   }
 
-  function startPolling(): void {
+  function startPolling(requestedJobId: string): void {
     stopPolling();
-    pollHandle = setInterval(fetchJobState, 1000);
-    fetchJobState();
+    const token = ++pollToken;
+    void pollJob(requestedJobId, token);
   }
 
   function stopPolling(): void {
-    if (pollHandle) {
-      clearInterval(pollHandle);
-      pollHandle = null;
+    pollToken += 1;
+    if (activePollController) {
+      activePollController.abort();
+      activePollController = null;
     }
   }
 

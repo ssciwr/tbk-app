@@ -71,3 +71,57 @@ test('results page supports confirm decision', async ({ page }) => {
   await page.getByRole('button', { name: 'Accept' }).first().click();
   await expect(page).toHaveURL(/\/fracture$/);
 });
+
+test('admin QR page ignores stale status responses from an older job', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  let createdJobs = 0;
+  await page.route('**/api/admin/qr-jobs', async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+
+    createdJobs += 1;
+    const jobId = createdJobs === 1 ? 'job-old' : 'job-new';
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ job_id: jobId, status: 'running' })
+    });
+  });
+
+  await page.route('**/api/admin/qr-jobs/job-old', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'failed', progress: 100 })
+    });
+  });
+
+  await page.route('**/api/admin/qr-jobs/job-new', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'done', progress: 100 })
+    });
+  });
+
+  await page.goto('/admin');
+  await page.getByRole('button', { name: 'Start Job' }).click();
+  await page.waitForTimeout(50);
+  await page.getByRole('button', { name: 'Start Job' }).click();
+
+  const statusLine = page.locator('p').filter({ hasText: 'Status:' });
+  await expect(statusLine).toContainText('done');
+
+  await page.waitForTimeout(1800);
+  await expect(statusLine).toContainText('done');
+});
