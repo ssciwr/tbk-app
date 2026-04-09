@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-import base64
 import contextlib
 from datetime import datetime
 import io
-import json
 import logging
 import multiprocessing
 from pathlib import Path
@@ -14,8 +12,6 @@ import random
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from typing import Any
 
 from PIL import Image
@@ -29,14 +25,14 @@ try:
         ChromaImg2ImgPipeline,
         ChromaTransformer2DModel,
     )
-    from openai import OpenAI
+    from mistralai.client import Mistral
     from rembg import new_session, remove
 except ImportError as exc:
     torch = None  # type: ignore[assignment]
     AutoPipelineForImage2Image = None  # type: ignore[assignment]
     ChromaImg2ImgPipeline = None  # type: ignore[assignment]
     ChromaTransformer2DModel = None  # type: ignore[assignment]
-    OpenAI = None  # type: ignore[assignment]
+    Mistral = None  # type: ignore[assignment]
     new_session = None  # type: ignore[assignment]
     remove = None  # type: ignore[assignment]
     _CHROMA_IMPORT_ERROR: ImportError | None = exc
@@ -72,8 +68,10 @@ Present the X-ray in a clean, clinical radiographic style with a neutral or blac
 Your output must be only the final FLUX prompt, written in natural language, descriptive, precise, and fully self-contained.
 Example output structure (you must replace placeholders with accurate descriptions from the image):
 A realistic medical-style X-ray image of a [detailed animal type and description], with its [head facing direction], [pose], [detailed limb proportions], and [specific features like ear size, hand shape, tail presence]. The X-ray reveals a biologically plausible skeletal structure matching its proportions, with elongated bones in the [arms/legs], defined phalanges in [hands/feet], a simplified ribcage, vertebral column following the posture, and structural support in the [ears/tail if applicable]. The soft tissue appears as a gentle, semi-transparent glow outlining the body and limbs. The image is set on a clean, black radiographic background, realistic and educational in style, without any creepy or unsettling features."""
+VLM_MODEL_NAME = "ministral-14b-latest"
+VLM_FILE_PURPOSE = "ocr"
 VLM_TEMPERATURE = 0.3
-VLM_TIMEOUT_SECONDS = 120.0
+VLM_MAX_TOKENS = 5000
 
 # Generation model
 TRANSFORMER_PATH = "chroma-unlocked-v44-detail-calibrated.safetensors"
@@ -588,14 +586,6 @@ def load_sdxl_style_pipeline(dtype: Any, device: str) -> Any:
     return pipe
 
 
-def image_to_data_url(image: Image.Image, fmt: str = "PNG") -> str:
-    buf = io.BytesIO()
-    image.save(buf, format=fmt)
-    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    mime = "image/png" if fmt.upper() == "PNG" else "image/jpeg"
-    return f"data:{mime};base64,{b64}"
-
-
 def extract_text_from_chat_completion(resp: Any) -> str:
     if isinstance(resp, dict):
         choices = resp.get("choices") or []
@@ -620,15 +610,6 @@ def extract_text_from_chat_completion(resp: Any) -> str:
                 chunks.append(str(item.text))
         return "".join(chunks).strip()
     return str(content).strip()
-
-
-def normalize_vlm_base_url(base_url: str) -> str:
-    normalized = base_url.strip().rstrip("/")
-    if not normalized:
-        raise ValueError("Empty VLM server URL.")
-    if normalized.endswith("/v1"):
-        return normalized
-    return f"{normalized}/v1"
 
 
 def _create_debug_output_dir() -> Path:
@@ -656,95 +637,81 @@ def _write_debug_image(
     image.save(debug_dir / filename, format="PNG")
 
 
-def generate_prompt_with_openai_compatible(
+def generate_prompt_with_mistral(
     image: Image.Image,
     instruction: str,
-    base_url: str,
     api_key: str,
     model: str,
     temperature: float,
-    timeout: float,
+    max_tokens: int,
 ) -> str:
+    cleaned_api_key = api_key.strip()
+    if not cleaned_api_key:
+        raise ValueError("Missing Mistral API key.")
     if not model.strip():
         raise ValueError("Missing VLM model name.")
 
-    normalized_base_url = normalize_vlm_base_url(base_url)
-    image_data_url = image_to_data_url(image, fmt="PNG")
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": instruction},
-                    {"type": "image_url", "image_url": {"url": image_data_url}},
-                ],
-            }
-        ],
-        "temperature": temperature,
-    }
+    _require_chroma_dependencies()
+    assert Mistral is not None
 
-    if api_key.strip():
-        _require_chroma_dependencies()
-        assert OpenAI is not None
+    client = Mistral(api_key=cleaned_api_key)
+    image_stream = io.BytesIO(_serialize_image_to_png_bytes(image))
+    uploaded_file_id: str | None = None
+    stage = "uploading image"
 
-        client = OpenAI(
-            base_url=normalized_base_url,
-            api_key=api_key.strip(),
-            timeout=timeout,
+    try:
+        uploaded_file = client.files.upload(
+            file={
+                "file_name": "vlm_input.png",
+                "content": image_stream,
+            },
+            purpose=VLM_FILE_PURPOSE,
         )
-        try:
-            resp = client.chat.completions.create(
-                model=payload["model"],
-                messages=payload["messages"],
-                temperature=payload["temperature"],
-            )
-        except Exception as e:
-            raise RuntimeError(
-                "Authenticated VLM request failed during chat.completions.create "
-                f"(base_url={normalized_base_url!r}, model={model!r})."
-            ) from e
-    else:
-        endpoint = f"{normalized_base_url}/chat/completions"
-        req = urllib.request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                "Unauthenticated VLM request failed with HTTP error "
-                f"{e.code} at {endpoint!r} (model={model!r}). Body: {error_body}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(
-                "Unauthenticated VLM request failed "
-                f"(endpoint={endpoint!r}, model={model!r})."
-            ) from e
+        uploaded_file_id = str(uploaded_file.id)
 
-        try:
-            resp = json.loads(body)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(
-                f"VLM response was not valid JSON from endpoint {endpoint!r}. Response: {body[:500]}"
-            ) from e
+        stage = "creating a signed file URL"
+        signed_url = client.files.get_signed_url(file_id=uploaded_file_id)
+
+        stage = "requesting chat completion"
+        resp = client.chat.complete(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": instruction},
+                        {"type": "image_url", "image_url": signed_url.url},
+                    ],
+                }
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Mistral VLM request failed while {stage} (model={model!r})."
+        ) from exc
+    finally:
+        image_stream.close()
+        if uploaded_file_id is not None:
+            try:
+                client.files.delete(file_id=uploaded_file_id)
+            except Exception:
+                logging.warning(
+                    "Failed to delete uploaded Mistral file %s after VLM request.",
+                    uploaded_file_id,
+                    exc_info=True,
+                )
 
     prompt = extract_text_from_chat_completion(resp)
     if not prompt:
-        raise RuntimeError("VLM returned empty prompt text in response.")
+        raise RuntimeError("Mistral VLM returned empty prompt text in response.")
     return prompt
 
 
 class ChromaWorkflow(WorkflowBase, name="chroma"):
     def __init__(self) -> None:
-        self.vlm_server = ""
-        self.vlm_server_key = ""
-        self.vlm_model_name = ""
+        self.mistral_api_key = ""
 
         self._device: str | None = None
         self._dtype: Any = None
@@ -754,26 +721,16 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._sdxl_pipe: Any = None
 
     def configure(self, **kwargs: Any) -> None:
-        vlm_server = kwargs.get("vlm_server")
-        if isinstance(vlm_server, str):
-            self.vlm_server = vlm_server
-
-        vlm_server_key = kwargs.get("vlm_server_key")
-        if isinstance(vlm_server_key, str):
-            self.vlm_server_key = vlm_server_key
-
-        vlm_model_name = kwargs.get("vlm_model_name")
-        if isinstance(vlm_model_name, str):
-            self.vlm_model_name = vlm_model_name
+        mistral_api_key = kwargs.get("mistral_api_key")
+        if isinstance(mistral_api_key, str):
+            self.mistral_api_key = mistral_api_key
 
     def setup(self) -> None:
         _require_chroma_dependencies()
         assert torch is not None
         assert new_session is not None
-        if not self.vlm_server.strip():
-            raise RuntimeError("Chroma workflow requires --vlm-server to be set.")
-        if not self.vlm_model_name.strip():
-            raise RuntimeError("Chroma workflow requires --vlm-model-name to be set.")
+        if not self.mistral_api_key.strip():
+            raise RuntimeError("Chroma workflow requires --mistral-api-key to be set.")
 
         device, dtype = pick_device_dtype("auto", DTYPE)
         logging.info(
@@ -846,28 +803,23 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             first_rembg_image,
         )
 
-        normalized_vlm_server = normalize_vlm_base_url(self.vlm_server)
-        key_state = (
-            "provided" if self.vlm_server_key.strip() else "omitted (no auth header)"
-        )
+        key_state = "provided" if self.mistral_api_key.strip() else "omitted"
         logging.info(
-            "Generating chroma prompt via VLM " "(base_url=%s, model=%s, api_key=%s).",
-            normalized_vlm_server,
-            self.vlm_model_name,
+            "Generating chroma prompt via Mistral VLM (model=%s, api_key=%s).",
+            VLM_MODEL_NAME,
             key_state,
         )
         prompt_instruction = build_vlm_prompt_instruction(
             animal_type_hint=animal_type_hint
         )
 
-        final_prompt = generate_prompt_with_openai_compatible(
+        final_prompt = generate_prompt_with_mistral(
             image=first_rembg_image,
             instruction=prompt_instruction,
-            base_url=normalized_vlm_server,
-            api_key=self.vlm_server_key,
-            model=self.vlm_model_name,
+            api_key=self.mistral_api_key,
+            model=VLM_MODEL_NAME,
             temperature=VLM_TEMPERATURE,
-            timeout=VLM_TIMEOUT_SECONDS,
+            max_tokens=VLM_MAX_TOKENS,
         )
         logging.info("VLM prompt generation completed.")
         logging.debug("VLM generated prompt: %s", final_prompt)
