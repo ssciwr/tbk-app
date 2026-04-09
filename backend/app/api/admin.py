@@ -31,11 +31,11 @@ async def get_qr_job(
     job_id: str,
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
-) -> dict[str, int | str]:
+) -> dict[str, int | str | None]:
     job = services.qr_jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="QR job not found")
-    return {"status": job.status, "progress": job.progress}
+    return {"status": job.status, "progress": job.progress, "error": job.error}
 
 
 @router.get("/qr-jobs/{job_id}/pdf")

@@ -11,6 +11,7 @@
   type QRJobStateResponse = {
     status: Exclude<QRJobStatus, 'idle' | 'starting'>;
     progress: number;
+    error?: string | null;
   };
 
   const POLL_INTERVAL_MS = 1000;
@@ -74,6 +75,7 @@
 
     status = data.status;
     progress = data.progress;
+    message = status === 'failed' ? data.error ?? 'QR generation failed.' : '';
 
     if (status === 'done' || status === 'failed') {
       stopPolling();
