@@ -42,6 +42,7 @@ class Job:
     image_bytes: bytes
     requested_images: int
     parameters: dict[str, Any]
+    generation_id: int = 1
     animal_name: str = ""
     child_name: str = ""
     animal_type: str = ""
@@ -124,19 +125,24 @@ class BackendClient:
     ) -> requests.Response:
         with self._request_lock:
             self._refresh_token()
+            extra_headers = kwargs.pop("headers", None) or {}
+            request_headers = self._auth_headers()
+            request_headers.update(extra_headers)
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                headers=self._auth_headers(),
+                headers=request_headers,
                 timeout=self.timeout_seconds,
                 **kwargs,
             )
             if response.status_code == 401:
                 self._refresh_token(force=True)
+                request_headers = self._auth_headers()
+                request_headers.update(extra_headers)
                 response = self.session.request(
                     method,
                     f"{self.base_url}{path}",
-                    headers=self._auth_headers(),
+                    headers=request_headers,
                     timeout=self.timeout_seconds,
                     **kwargs,
                 )
@@ -175,6 +181,23 @@ class BackendClient:
             return 1
         return max(requested_images, 1)
 
+    @staticmethod
+    def _parse_generation_id(response: requests.Response) -> int:
+        raw_generation_id = response.headers.get("X-Generation-Id")
+        if not raw_generation_id:
+            raise RuntimeError("Worker job response missing X-Generation-Id header.")
+        try:
+            generation_id = int(raw_generation_id)
+        except ValueError as exc:
+            raise RuntimeError(
+                "Worker job response contained an invalid X-Generation-Id header."
+            ) from exc
+        if generation_id < 1:
+            raise RuntimeError(
+                "Worker job response contained a non-positive X-Generation-Id header."
+            )
+        return generation_id
+
     def next_job(self) -> Job | None:
         response = self._request_with_auth("GET", "/api/worker/jobs/next")
         if response.status_code == 204:
@@ -190,12 +213,18 @@ class BackendClient:
             image_bytes=response.content,
             requested_images=self._parse_requested_images(response),
             parameters=self._parse_parameters(response),
+            generation_id=self._parse_generation_id(response),
             animal_name=(response.headers.get("X-Animal-Name") or "").strip(),
             child_name=(response.headers.get("X-Child-Name") or "").strip(),
             animal_type=(response.headers.get("X-Animal-Type") or "").strip(),
         )
 
-    def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
+    def submit_result(
+        self,
+        case_id: int,
+        generation_id: int,
+        image_bytes: bytes,
+    ) -> dict[str, Any]:
         files = {
             "result": (
                 f"result_{case_id}.png",
@@ -204,13 +233,20 @@ class BackendClient:
             )
         }
         response = self._request_with_auth(
-            "POST", f"/api/worker/jobs/{case_id}/results", files=files
+            "POST",
+            f"/api/worker/jobs/{case_id}/results",
+            headers={"X-Generation-Id": str(generation_id)},
+            files=files,
         )
         response.raise_for_status()
         return response.json()
 
-    def report_failed_job(self, case_id: int) -> dict[str, Any]:
-        response = self._request_with_auth("POST", f"/api/worker/jobs/{case_id}/failed")
+    def report_failed_job(self, case_id: int, generation_id: int) -> dict[str, Any]:
+        response = self._request_with_auth(
+            "POST",
+            f"/api/worker/jobs/{case_id}/failed",
+            headers={"X-Generation-Id": str(generation_id)},
+        )
         response.raise_for_status()
         return response.json()
 
@@ -581,7 +617,12 @@ def run_runner(
                             )
                         )
                         result = _image_to_png_bytes(output_image)
-                        submission = client.submit_result(job.case_id, result)
+                        submission = client.submit_result(
+                            job.case_id,
+                            job.generation_id,
+                            result,
+                        )
+                        submission_status = str(submission.get("status", "accepted"))
                         logging.info(
                             (
                                 "Submitted result %s for case %s (%s/%s, "
@@ -592,8 +633,19 @@ def run_runner(
                             submission.get("received_results"),
                             submission.get("expected_results"),
                             submission.get("ready_for_review"),
-                            submission.get("status"),
+                            submission_status,
                         )
+                        if submission_status != "accepted":
+                            logging.info(
+                                (
+                                    "Stopping work on case %s generation %s after "
+                                    "backend returned status=%s."
+                                ),
+                                job.case_id,
+                                job.generation_id,
+                                submission_status,
+                            )
+                            break
 
                     if submitted_count == 0:
                         raise RuntimeError(
@@ -611,7 +663,10 @@ def run_runner(
                     )
                     if submitted_count < job.requested_images:
                         try:
-                            failure_report = client.report_failed_job(job.case_id)
+                            failure_report = client.report_failed_job(
+                                job.case_id,
+                                job.generation_id,
+                            )
                             logging.info(
                                 "Reported failed job for case %s: %s.",
                                 job.case_id,

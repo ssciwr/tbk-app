@@ -6,6 +6,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Header,
     HTTPException,
     Response,
     UploadFile,
@@ -34,6 +35,7 @@ async def worker_next_job(
 
     response = Response(content=case.original_bytes, media_type="image/png")
     response.headers["X-Case-Id"] = str(case.case_id)
+    response.headers["X-Generation-Id"] = str(case.generation_id)
     if case.metadata.child_name:
         response.headers["X-Child-Name"] = case.metadata.child_name
     if case.metadata.animal_name:
@@ -77,6 +79,7 @@ async def worker_heartbeat(
 async def worker_submit_result(
     case_id: int,
     result: Annotated[UploadFile, File(...)],
+    generation_id: Annotated[int, Header(alias="X-Generation-Id")],
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
 ) -> dict[str, int | bool | str]:
@@ -90,8 +93,12 @@ async def worker_submit_result(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        received, expected, ready_for_review, ignored = services.queue.submit_result(
-            case_id, png_bytes
+        received, expected, ready_for_review, submission_status = (
+            services.queue.submit_result(
+                case_id,
+                generation_id,
+                png_bytes,
+            )
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -99,7 +106,7 @@ async def worker_submit_result(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {
-        "status": "ignored" if ignored else "accepted",
+        "status": submission_status,
         "received_results": received,
         "expected_results": expected,
         "ready_for_review": ready_for_review,
@@ -109,12 +116,16 @@ async def worker_submit_result(
 @router.post("/jobs/{case_id}/failed")
 async def worker_report_job_failed(
     case_id: int,
+    generation_id: Annotated[int, Header(alias="X-Generation-Id")],
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
 ) -> dict[str, str | int]:
     case = services.queue.get_case(case_id)
     if case is None:
         raise HTTPException(status_code=404, detail="Case not found")
+
+    if case.generation_id != generation_id:
+        return {"status": "stale", "case_id": case_id}
 
     # Late failure reports are harmless no-ops once a case has moved on.
     if case.state in {

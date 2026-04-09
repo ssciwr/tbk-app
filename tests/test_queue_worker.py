@@ -7,6 +7,16 @@ import pytest
 from httpx import AsyncClient
 
 
+def _worker_generation_headers(
+    auth_headers: dict[str, str],
+    job_response,
+) -> dict[str, str]:
+    return {
+        **auth_headers,
+        "X-Generation-Id": job_response.headers["X-Generation-Id"],
+    }
+
+
 async def _upload_case(
     client: AsyncClient,
     auth_headers: dict[str, str],
@@ -117,6 +127,7 @@ async def test_case_animal_type_is_exposed_in_pending_and_worker_headers(
     next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert next_job.status_code == 200
     assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert int(next_job.headers["X-Generation-Id"]) == 1
     assert next_job.headers["X-Animal-Type"] == "fox"
 
 
@@ -154,6 +165,7 @@ async def test_case_can_be_fast_tracked_with_qr_only_metadata(
     next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert next_job.status_code == 200
     assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert int(next_job.headers["X-Generation-Id"]) == 1
     assert "X-Child-Name" not in next_job.headers
     assert "X-Animal-Name" not in next_job.headers
 
@@ -181,6 +193,7 @@ async def test_case_upload_and_queue_insertion(
     assert next_job.status_code == 200
     assert next_job.headers["content-type"].startswith("image/png")
     assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert int(next_job.headers["X-Generation-Id"]) == 1
     assert next_job.headers["X-Child-Name"] == "Ada"
     assert int(next_job.headers["X-Requested-Images"]) == settings.RESULTS_PER_IMAGE
     assert "X-Last-Name" not in next_job.headers
@@ -197,6 +210,7 @@ async def test_worker_next_job_and_204_behavior(
 
     response = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert response.status_code == 200
+    assert int(response.headers["X-Generation-Id"]) == 1
     assert int(response.headers["X-Requested-Images"]) == settings.RESULTS_PER_IMAGE
 
     empty = await client.get("/api/worker/jobs/next", headers=auth_headers)
@@ -248,11 +262,12 @@ async def test_worker_result_submission_until_review_ready(
     dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert dispatched.status_code == 200
     requested_images = int(dispatched.headers["X-Requested-Images"])
+    worker_headers = _worker_generation_headers(auth_headers, dispatched)
 
     for index in range(requested_images):
         result = await client.post(
             f"/api/worker/jobs/{case_id}/results",
-            headers=auth_headers,
+            headers=worker_headers,
             files={
                 "result": (f"result-{index}.png", io.BytesIO(png_bytes), "image/png")
             },
@@ -281,10 +296,12 @@ async def test_worker_failed_job_requeues_collecting_case(
     case_id = await _upload_case(client, auth_headers, png_bytes)
     dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert dispatched.status_code == 200
+    first_generation_id = int(dispatched.headers["X-Generation-Id"])
+    worker_headers = _worker_generation_headers(auth_headers, dispatched)
 
     first_result = await client.post(
         f"/api/worker/jobs/{case_id}/results",
-        headers=auth_headers,
+        headers=worker_headers,
         files={"result": ("result.png", io.BytesIO(png_bytes), "image/png")},
     )
     assert first_result.status_code == 200
@@ -292,7 +309,7 @@ async def test_worker_failed_job_requeues_collecting_case(
 
     failed = await client.post(
         f"/api/worker/jobs/{case_id}/failed",
-        headers=auth_headers,
+        headers=worker_headers,
     )
     assert failed.status_code == 200
     assert failed.json() == {"status": "requeued", "case_id": case_id}
@@ -307,6 +324,7 @@ async def test_worker_failed_job_requeues_collecting_case(
     next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert next_job.status_code == 200
     assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert int(next_job.headers["X-Generation-Id"]) == first_generation_id + 1
 
 
 @pytest.mark.anyio
@@ -319,11 +337,13 @@ async def test_review_retry_requeues_case(
     dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert dispatched.status_code == 200
     requested_images = int(dispatched.headers["X-Requested-Images"])
+    first_generation_id = int(dispatched.headers["X-Generation-Id"])
+    worker_headers = _worker_generation_headers(auth_headers, dispatched)
 
     for _ in range(requested_images):
         submitted = await client.post(
             f"/api/worker/jobs/{case_id}/results",
-            headers=auth_headers,
+            headers=worker_headers,
             files={"result": ("result.png", io.BytesIO(png_bytes), "image/png")},
         )
         assert submitted.status_code == 200
@@ -345,3 +365,55 @@ async def test_review_retry_requeues_case(
     next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert next_job.status_code == 200
     assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert int(next_job.headers["X-Generation-Id"]) == first_generation_id + 1
+
+
+@pytest.mark.anyio
+async def test_review_retry_invalidates_running_generation_job(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    case_id = await _upload_case(client, auth_headers, png_bytes)
+    first_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert first_job.status_code == 200
+    first_generation_id = int(first_job.headers["X-Generation-Id"])
+    first_worker_headers = _worker_generation_headers(auth_headers, first_job)
+
+    accepted = await client.post(
+        f"/api/worker/jobs/{case_id}/results",
+        headers=first_worker_headers,
+        files={"result": ("result-0.png", io.BytesIO(png_bytes), "image/png")},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["status"] == "accepted"
+    assert accepted.json()["received_results"] == 1
+
+    retry = await client.post(
+        f"/api/review/{case_id}/decision",
+        headers=auth_headers,
+        json={"action": "retry", "choice_index": None},
+    )
+    assert retry.status_code == 200
+
+    stale_result = await client.post(
+        f"/api/worker/jobs/{case_id}/results",
+        headers=first_worker_headers,
+        files={"result": ("result-stale.png", io.BytesIO(png_bytes), "image/png")},
+    )
+    assert stale_result.status_code == 200
+    assert stale_result.json()["status"] == "stale"
+    assert stale_result.json()["received_results"] == 0
+    assert stale_result.json()["ready_for_review"] is False
+
+    stale_failure = await client.post(
+        f"/api/worker/jobs/{case_id}/failed",
+        headers=first_worker_headers,
+    )
+    assert stale_failure.status_code == 200
+    assert stale_failure.json() == {"status": "stale", "case_id": case_id}
+
+    second_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert second_job.status_code == 200
+    assert int(second_job.headers["X-Case-Id"]) == case_id
+    assert int(second_job.headers["X-Generation-Id"]) == first_generation_id + 1

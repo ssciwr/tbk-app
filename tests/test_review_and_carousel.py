@@ -7,6 +7,16 @@ import pytest
 from httpx import AsyncClient
 
 
+def _worker_generation_headers(
+    auth_headers: dict[str, str],
+    job_response,
+) -> dict[str, str]:
+    return {
+        **auth_headers,
+        "X-Generation-Id": job_response.headers["X-Generation-Id"],
+    }
+
+
 async def _create_case_ready_for_review(
     client: AsyncClient,
     auth_headers: dict[str, str],
@@ -37,11 +47,12 @@ async def _create_case_ready_for_review(
     dispatched = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert dispatched.status_code == 200
     requested_images = int(dispatched.headers["X-Requested-Images"])
+    worker_headers = _worker_generation_headers(auth_headers, dispatched)
 
     for _ in range(requested_images):
         submitted = await client.post(
             f"/api/worker/jobs/{case_id}/results",
-            headers=auth_headers,
+            headers=worker_headers,
             files={"result": ("result.png", io.BytesIO(png_bytes), "image/png")},
         )
         assert submitted.status_code == 200
@@ -178,10 +189,11 @@ async def test_review_early_confirm_cleans_queue_and_ignores_late_results(
     first_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert first_job.status_code == 200
     assert int(first_job.headers["X-Case-Id"]) == case_id
+    worker_headers = _worker_generation_headers(auth_headers, first_job)
 
     first_result = await client.post(
         f"/api/worker/jobs/{case_id}/results",
-        headers=auth_headers,
+        headers=worker_headers,
         files={"result": ("result.png", io.BytesIO(png_bytes), "image/png")},
     )
     assert first_result.status_code == 200
@@ -206,7 +218,7 @@ async def test_review_early_confirm_cleans_queue_and_ignores_late_results(
     # Late submissions from workers are acknowledged but ignored.
     late_result = await client.post(
         f"/api/worker/jobs/{case_id}/results",
-        headers=auth_headers,
+        headers=worker_headers,
         files={"result": ("late.png", io.BytesIO(png_bytes), "image/png")},
     )
     assert late_result.status_code == 200
@@ -223,7 +235,7 @@ async def test_review_early_confirm_cleans_queue_and_ignores_late_results(
 
     late_after_finalize = await client.post(
         f"/api/worker/jobs/{case_id}/results",
-        headers=auth_headers,
+        headers=worker_headers,
         files={"result": ("late-final.png", io.BytesIO(png_bytes), "image/png")},
     )
     assert late_after_finalize.status_code == 200

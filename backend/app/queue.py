@@ -74,6 +74,7 @@ class CaseQueue:
             case.original_bytes = original_bytes
             case.state = CaseState.QUEUED
             case.dispatches = 0
+            case.generation_id += 1
             case.results.clear()
             case.selected_result_bytes = None
             self._dispatch_queue.append(case_id)
@@ -103,12 +104,21 @@ class CaseQueue:
             return None
 
     def submit_result(
-        self, case_id: int, result_bytes: bytes
-    ) -> tuple[int, int, bool, bool]:
+        self, case_id: int, generation_id: int, result_bytes: bytes
+    ) -> tuple[int, int, bool, str]:
         with self._lock:
             case = self._cases.get(case_id)
             if case is None:
                 raise KeyError("Case not found")
+
+            if case.generation_id != generation_id:
+                ready_for_review = case.state == CaseState.AWAITING_REVIEW
+                return (
+                    len(case.results),
+                    case.expected_results,
+                    ready_for_review,
+                    "stale",
+                )
 
             # Workers can still submit late results after a user resolved a case.
             # Treat these as no-op acknowledgements instead of hard failures.
@@ -117,12 +127,12 @@ class CaseQueue:
                 CaseState.CONFIRMED,
                 CaseState.CANCELED,
             }:
-                return len(case.results), case.expected_results, False, True
+                return len(case.results), case.expected_results, False, "ignored"
             if case.original_bytes is None:
                 raise ValueError("Case has no acquired image")
 
             if len(case.results) >= case.expected_results:
-                return len(case.results), case.expected_results, True, True
+                return len(case.results), case.expected_results, True, "ignored"
 
             if len(case.results) < case.expected_results:
                 case.results.append(result_bytes)
@@ -133,7 +143,12 @@ class CaseQueue:
                 self._awaiting_review.add(case_id)
                 self._drop_from_dispatch_queue(case_id)
 
-            return len(case.results), case.expected_results, ready_for_review, False
+            return (
+                len(case.results),
+                case.expected_results,
+                ready_for_review,
+                "accepted",
+            )
 
     def pending_review(self) -> list[CaseRecord]:
         with self._lock:
@@ -298,6 +313,7 @@ class CaseQueue:
             case.results.clear()
             case.selected_result_bytes = None
             case.dispatches = 0
+            case.generation_id += 1
             case.state = CaseState.RETRIED
             self._awaiting_review.discard(case_id)
             self._drop_from_dispatch_queue(case_id)

@@ -442,6 +442,7 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
         status_code=200,
         headers={
             "X-Case-Id": "42",
+            "X-Generation-Id": "7",
             "X-Child-Name": "Ada",
             "X-Animal-Name": "Bunny",
             "X-Animal-Type": "rabbit",
@@ -461,6 +462,7 @@ def test_backend_client_next_job_parses_headers_and_payload(monkeypatch) -> None
     assert job.image_bytes == image_bytes
     assert job.requested_images == 3
     assert job.parameters == {"strength": 0.7}
+    assert job.generation_id == 7
     assert job.animal_name == "Bunny"
     assert job.child_name == "Ada"
     assert job.animal_type == "rabbit"
@@ -548,11 +550,12 @@ def test_backend_client_submit_result_posts_file_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_with_auth", fake_request)
 
-    payload = client.submit_result(9, _png_bytes())
+    payload = client.submit_result(9, 4, _png_bytes())
 
     assert payload == {"status": "accepted"}
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/worker/jobs/9/results"
+    assert captured["kwargs"]["headers"] == {"X-Generation-Id": "4"}
     assert "files" in captured["kwargs"]
     filename, file_obj, content_type = captured["kwargs"]["files"]["result"]
     assert filename == "result_9.png"
@@ -572,12 +575,12 @@ def test_backend_client_report_failed_job_posts_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_with_auth", fake_request)
 
-    payload = client.report_failed_job(11)
+    payload = client.report_failed_job(11, 6)
 
     assert payload == {"status": "requeued"}
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/worker/jobs/11/failed"
-    assert captured["kwargs"] == {}
+    assert captured["kwargs"] == {"headers": {"X-Generation-Id": "6"}}
 
 
 def test_backend_client_heartbeat_posts_endpoint(monkeypatch) -> None:
@@ -635,7 +638,7 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
         def __init__(self, *, server: str, password: str) -> None:
             self.server = server
             self.password = password
-            self.submissions: list[tuple[int, bytes]] = []
+            self.submissions: list[tuple[int, int, bytes]] = []
             self._next_calls = 0
             FakeBackendClient.instances.append(self)
 
@@ -651,10 +654,16 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
                 )
             raise KeyboardInterrupt
 
-        def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
-            self.submissions.append((case_id, image_bytes))
+        def submit_result(
+            self,
+            case_id: int,
+            generation_id: int,
+            image_bytes: bytes,
+        ) -> dict[str, Any]:
+            self.submissions.append((case_id, generation_id, image_bytes))
             count = len(self.submissions)
             return {
+                "status": "accepted",
                 "received_results": count,
                 "expected_results": 3,
                 "ready_for_review": count >= 3,
@@ -677,9 +686,15 @@ def test_run_runner_submits_images_as_they_are_yielded(monkeypatch) -> None:
     fake_client = FakeBackendClient.instances[0]
     assert fake_client.server == "http://backend:8000"
     assert fake_client.password == "pw"
-    assert [case_id for case_id, _ in fake_client.submissions] == [7, 7, 7]
+    assert [case_id for case_id, _, _ in fake_client.submissions] == [7, 7, 7]
+    assert [generation_id for _, generation_id, _ in fake_client.submissions] == [
+        1,
+        1,
+        1,
+    ]
     assert all(
-        image_bytes.startswith(b"\x89PNG") for _, image_bytes in fake_client.submissions
+        image_bytes.startswith(b"\x89PNG")
+        for _, _, image_bytes in fake_client.submissions
     )
 
 
@@ -714,7 +729,7 @@ def test_run_runner_skips_watermark_when_no_watermark_enabled(monkeypatch) -> No
         def __init__(self, *, server: str, password: str) -> None:
             self.server = server
             self.password = password
-            self.submissions: list[tuple[int, bytes]] = []
+            self.submissions: list[tuple[int, int, bytes]] = []
             self._next_calls = 0
             FakeBackendClient.instances.append(self)
 
@@ -731,8 +746,13 @@ def test_run_runner_skips_watermark_when_no_watermark_enabled(monkeypatch) -> No
                 )
             raise KeyboardInterrupt
 
-        def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
-            self.submissions.append((case_id, image_bytes))
+        def submit_result(
+            self,
+            case_id: int,
+            generation_id: int,
+            image_bytes: bytes,
+        ) -> dict[str, Any]:
+            self.submissions.append((case_id, generation_id, image_bytes))
             return {
                 "status": "accepted",
                 "received_results": 1,
@@ -759,8 +779,9 @@ def test_run_runner_skips_watermark_when_no_watermark_enabled(monkeypatch) -> No
 
     assert len(FakeBackendClient.instances) == 1
     submissions = FakeBackendClient.instances[0].submissions
-    assert [case_id for case_id, _ in submissions] == [5]
-    assert submissions[0][1].startswith(b"\x89PNG")
+    assert [case_id for case_id, _, _ in submissions] == [5]
+    assert [generation_id for _, generation_id, _ in submissions] == [1]
+    assert submissions[0][2].startswith(b"\x89PNG")
 
 
 def test_run_runner_skips_watermark_when_job_lacks_name_metadata(monkeypatch) -> None:
@@ -794,7 +815,7 @@ def test_run_runner_skips_watermark_when_job_lacks_name_metadata(monkeypatch) ->
         def __init__(self, *, server: str, password: str) -> None:
             self.server = server
             self.password = password
-            self.submissions: list[tuple[int, bytes]] = []
+            self.submissions: list[tuple[int, int, bytes]] = []
             self._next_calls = 0
             FakeBackendClient.instances.append(self)
 
@@ -811,8 +832,13 @@ def test_run_runner_skips_watermark_when_job_lacks_name_metadata(monkeypatch) ->
                 )
             raise KeyboardInterrupt
 
-        def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
-            self.submissions.append((case_id, image_bytes))
+        def submit_result(
+            self,
+            case_id: int,
+            generation_id: int,
+            image_bytes: bytes,
+        ) -> dict[str, Any]:
+            self.submissions.append((case_id, generation_id, image_bytes))
             return {
                 "status": "accepted",
                 "received_results": 1,
@@ -838,8 +864,9 @@ def test_run_runner_skips_watermark_when_job_lacks_name_metadata(monkeypatch) ->
 
     assert len(FakeBackendClient.instances) == 1
     submissions = FakeBackendClient.instances[0].submissions
-    assert [case_id for case_id, _ in submissions] == [6]
-    assert submissions[0][1].startswith(b"\x89PNG")
+    assert [case_id for case_id, _, _ in submissions] == [6]
+    assert [generation_id for _, generation_id, _ in submissions] == [1]
+    assert submissions[0][2].startswith(b"\x89PNG")
 
 
 def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
@@ -874,8 +901,8 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
         def __init__(self, *, server: str, password: str) -> None:
             self.server = server
             self.password = password
-            self.submissions: list[int] = []
-            self.reported_failures: list[int] = []
+            self.submissions: list[tuple[int, int]] = []
+            self.reported_failures: list[tuple[int, int]] = []
             self._next_calls = 0
             FakeBackendClient.instances.append(self)
 
@@ -890,8 +917,13 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
                 )
             raise KeyboardInterrupt
 
-        def submit_result(self, case_id: int, _image_bytes: bytes) -> dict[str, Any]:
-            self.submissions.append(case_id)
+        def submit_result(
+            self,
+            case_id: int,
+            generation_id: int,
+            _image_bytes: bytes,
+        ) -> dict[str, Any]:
+            self.submissions.append((case_id, generation_id))
             return {
                 "status": "accepted",
                 "received_results": len(self.submissions),
@@ -899,8 +931,8 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
                 "ready_for_review": False,
             }
 
-        def report_failed_job(self, case_id: int) -> dict[str, Any]:
-            self.reported_failures.append(case_id)
+        def report_failed_job(self, case_id: int, generation_id: int) -> dict[str, Any]:
+            self.reported_failures.append((case_id, generation_id))
             return {"status": "requeued"}
 
     monkeypatch.setattr(runner_module, "create_workflow", lambda _name: FakeWorkflow())
@@ -916,8 +948,8 @@ def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
 
     assert len(FakeBackendClient.instances) == 1
     fake_client = FakeBackendClient.instances[0]
-    assert fake_client.submissions == [7]
-    assert fake_client.reported_failures == [7]
+    assert fake_client.submissions == [(7, 1)]
+    assert fake_client.reported_failures == [(7, 1)]
 
 
 def test_run_runner_passes_debug_flag_into_generate(monkeypatch) -> None:
@@ -965,7 +997,12 @@ def test_run_runner_passes_debug_flag_into_generate(monkeypatch) -> None:
                 )
             raise KeyboardInterrupt
 
-        def submit_result(self, _case_id: int, _image_bytes: bytes) -> dict[str, Any]:
+        def submit_result(
+            self,
+            _case_id: int,
+            _generation_id: int,
+            _image_bytes: bytes,
+        ) -> dict[str, Any]:
             return {
                 "status": "accepted",
                 "received_results": 1,
@@ -1037,7 +1074,12 @@ def test_run_runner_sends_processing_heartbeat_when_available(monkeypatch) -> No
         def heartbeat(self) -> None:
             self.heartbeat_calls += 1
 
-        def submit_result(self, _case_id: int, _image_bytes: bytes) -> dict[str, Any]:
+        def submit_result(
+            self,
+            _case_id: int,
+            _generation_id: int,
+            _image_bytes: bytes,
+        ) -> dict[str, Any]:
             return {
                 "status": "accepted",
                 "received_results": 1,
@@ -1057,6 +1099,88 @@ def test_run_runner_sends_processing_heartbeat_when_available(monkeypatch) -> No
 
     assert len(FakeBackendClient.instances) == 1
     assert FakeBackendClient.instances[0].heartbeat_calls >= 1
+
+
+def test_run_runner_stops_after_backend_marks_job_stale(monkeypatch) -> None:
+    source_image = _png_bytes()
+
+    class FakeWorkflow:
+        name = "dummy"
+
+        def __init__(self) -> None:
+            self.yielded_indices: list[int] = []
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            return None
+
+        def parameter_schema(self) -> dict[str, Any]:
+            return {"type": "object"}
+
+        def generate(
+            self,
+            img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            num_images: int = 1,
+            debug: bool = False,
+        ):
+            del debug
+            for index in range(num_images):
+                self.yielded_indices.append(index)
+                yield Image.new("RGB", img.size, color=(index, 0, 0))
+
+    class FakeBackendClient:
+        instances: list["FakeBackendClient"] = []
+
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+            self.submissions: list[tuple[int, int]] = []
+            self._next_calls = 0
+            FakeBackendClient.instances.append(self)
+
+        def next_job(self) -> runner_module.Job | None:
+            self._next_calls += 1
+            if self._next_calls == 1:
+                return runner_module.Job(
+                    case_id=13,
+                    image_bytes=source_image,
+                    requested_images=3,
+                    parameters={},
+                    generation_id=4,
+                )
+            raise KeyboardInterrupt
+
+        def submit_result(
+            self,
+            case_id: int,
+            generation_id: int,
+            _image_bytes: bytes,
+        ) -> dict[str, Any]:
+            self.submissions.append((case_id, generation_id))
+            return {
+                "status": "stale",
+                "received_results": 0,
+                "expected_results": 3,
+                "ready_for_review": False,
+            }
+
+    workflow = FakeWorkflow()
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: workflow)
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+        )
+
+    assert workflow.yielded_indices == [0]
+    assert len(FakeBackendClient.instances) == 1
+    assert FakeBackendClient.instances[0].submissions == [(13, 4)]
 
 
 def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:

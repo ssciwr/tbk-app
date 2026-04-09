@@ -35,6 +35,7 @@ class CaseRecord:
     selected_result_bytes: bytes | None = None
     state: CaseState = CaseState.METADATA_ENTERED
     dispatches: int = 0
+    generation_id: int = 0
     approved_at: datetime | None = None
 
 
