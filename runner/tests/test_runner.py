@@ -609,6 +609,85 @@ def test_run_runner_skips_watermark_when_no_watermark_enabled(monkeypatch) -> No
     assert submissions[0][1].startswith(b"\x89PNG")
 
 
+def test_run_runner_skips_watermark_when_job_lacks_name_metadata(monkeypatch) -> None:
+    source_image = _png_bytes()
+
+    class FakeWorkflow:
+        name = "dummy"
+
+        def is_available(self) -> bool:
+            return True
+
+        def setup(self) -> None:
+            return None
+
+        def parameter_schema(self) -> dict[str, Any]:
+            return {"type": "object"}
+
+        def generate(
+            self,
+            img: Image.Image,
+            _parameters: dict[str, Any] | None = None,
+            _num_images: int = 1,
+            debug: bool = False,
+        ):
+            del debug
+            yield Image.new("RGB", img.size, color=(1, 2, 3))
+
+    class FakeBackendClient:
+        instances: list["FakeBackendClient"] = []
+
+        def __init__(self, *, server: str, password: str) -> None:
+            self.server = server
+            self.password = password
+            self.submissions: list[tuple[int, bytes]] = []
+            self._next_calls = 0
+            FakeBackendClient.instances.append(self)
+
+        def next_job(self) -> runner_module.Job | None:
+            self._next_calls += 1
+            if self._next_calls == 1:
+                return runner_module.Job(
+                    case_id=6,
+                    image_bytes=source_image,
+                    requested_images=1,
+                    parameters={},
+                    animal_name="",
+                    child_name="Ada",
+                )
+            raise KeyboardInterrupt
+
+        def submit_result(self, case_id: int, image_bytes: bytes) -> dict[str, Any]:
+            self.submissions.append((case_id, image_bytes))
+            return {
+                "status": "accepted",
+                "received_results": 1,
+                "expected_results": 1,
+                "ready_for_review": True,
+            }
+
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> Image.Image:
+        raise AssertionError(
+            "_apply_watermark should not be called when name metadata is incomplete"
+        )
+
+    monkeypatch.setattr(runner_module, "create_workflow", lambda _name: FakeWorkflow())
+    monkeypatch.setattr(runner_module, "BackendClient", FakeBackendClient)
+    monkeypatch.setattr(runner_module, "_apply_watermark", fail_if_called)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_module.run_runner(
+            workflow_name="dummy",
+            server="http://backend:8000",
+            password="pw",
+        )
+
+    assert len(FakeBackendClient.instances) == 1
+    submissions = FakeBackendClient.instances[0].submissions
+    assert [case_id for case_id, _ in submissions] == [6]
+    assert submissions[0][1].startswith(b"\x89PNG")
+
+
 def test_run_runner_reports_failed_job_when_case_stalls(monkeypatch) -> None:
     source_image = _png_bytes()
 

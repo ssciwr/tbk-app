@@ -544,15 +544,19 @@
 
   <section class="card">
     <h2>Case Details</h2>
+    <p class="form-note">
+      For fast-track intake, you can leave the child and animal names blank and save only the QR code.
+      Nameless cases skip watermarking on generated images.
+    </p>
     <form on:submit={submitCaseMetadata}>
       <label>
         Child name
-        <input bind:value={childName} required />
+        <input bind:value={childName} placeholder="Optional for fast-track" />
       </label>
 
       <label>
         Animal name
-        <input bind:value={animalName} required />
+        <input bind:value={animalName} placeholder="Optional for fast-track" />
       </label>
 
       <label>
@@ -638,5 +642,9 @@
 
   .scan-status-row p {
     margin: 0;
+  }
+
+  .form-note {
+    margin-top: 0;
   }
 </style>

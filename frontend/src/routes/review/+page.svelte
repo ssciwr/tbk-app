@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
+  import { hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
 
   type ApiPendingCase = {
@@ -180,8 +181,15 @@
             <div class="case-top-row">
               <section class="meta-panel">
                 <h2>Case #{pending.case_id}</h2>
-                <p class="meta-line">Child: {pending.metadata.child_name}</p>
-                <p class="meta-line">Animal: {pending.metadata.animal_name}</p>
+                {#if hasText(pending.metadata.child_name)}
+                  <p class="meta-line">Child: {pending.metadata.child_name}</p>
+                {/if}
+                {#if hasText(pending.metadata.animal_name)}
+                  <p class="meta-line">Animal: {pending.metadata.animal_name}</p>
+                {/if}
+                {#if isQrOnlyCase(pending.metadata)}
+                  <p class="meta-line">Mode: QR-only fast-track</p>
+                {/if}
                 {#if !pending.ready_for_review}
                   <p class="generation-note">
                     Image currently generating ({pending.received_results}/{pending.results_per_image})

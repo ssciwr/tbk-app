@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
+  import { hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
 
   type ApiCarouselItem = {
@@ -159,8 +160,15 @@
 
     <div class="meta-grid">
       <p><strong>Case:</strong> #{items[index].case_id}</p>
-      <p><strong>Child:</strong> {items[index].metadata.child_name}</p>
-      <p><strong>Animal:</strong> {items[index].metadata.animal_name}</p>
+      {#if hasText(items[index].metadata.child_name)}
+        <p><strong>Child:</strong> {items[index].metadata.child_name}</p>
+      {/if}
+      {#if hasText(items[index].metadata.animal_name)}
+        <p><strong>Animal:</strong> {items[index].metadata.animal_name}</p>
+      {/if}
+      {#if isQrOnlyCase(items[index].metadata)}
+        <p><strong>Mode:</strong> QR-only fast-track</p>
+      {/if}
       <p><strong>QR:</strong> {items[index].metadata.qr_content}</p>
     </div>
 

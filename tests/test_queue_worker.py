@@ -13,10 +13,12 @@ async def _upload_case(
     image_bytes: bytes,
     *,
     animal_type: str | None = None,
+    child_name: str = "Ada",
+    animal_name: str = "Teddy",
 ) -> int:
     payload = {
-        "child_name": "Ada",
-        "animal_name": "Teddy",
+        "child_name": child_name,
+        "animal_name": animal_name,
         "qr_content": "1",
         "broken_bone": "false",
     }
@@ -116,6 +118,44 @@ async def test_case_animal_type_is_exposed_in_pending_and_worker_headers(
     assert next_job.status_code == 200
     assert int(next_job.headers["X-Case-Id"]) == case_id
     assert next_job.headers["X-Animal-Type"] == "fox"
+
+
+@pytest.mark.anyio
+async def test_case_can_be_fast_tracked_with_qr_only_metadata(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    created = await client.post(
+        "/api/cases",
+        headers=auth_headers,
+        data={
+            "qr_content": "qr-only-1",
+        },
+    )
+    assert created.status_code == 200
+    case_id = int(created.json()["case_id"])
+
+    pending = await client.get("/api/cases/pending-image", headers=auth_headers)
+    assert pending.status_code == 200
+    pending_cases = pending.json()["cases"]
+    assert pending_cases and pending_cases[0]["case_id"] == case_id
+    assert pending_cases[0]["metadata"]["child_name"] == ""
+    assert pending_cases[0]["metadata"]["animal_name"] == ""
+    assert pending_cases[0]["metadata"]["qr_content"] == "qr-only-1"
+
+    upload = await client.post(
+        f"/api/cases/{case_id}/image",
+        headers=auth_headers,
+        files={"file": ("case.png", io.BytesIO(png_bytes), "image/png")},
+    )
+    assert upload.status_code == 200
+
+    next_job = await client.get("/api/worker/jobs/next", headers=auth_headers)
+    assert next_job.status_code == 200
+    assert int(next_job.headers["X-Case-Id"]) == case_id
+    assert "X-Child-Name" not in next_job.headers
+    assert "X-Animal-Name" not in next_job.headers
 
 
 @pytest.mark.anyio

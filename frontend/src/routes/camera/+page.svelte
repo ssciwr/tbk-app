@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { authedFetch } from '$lib/api';
   import { rememberProfiledCamera, startProfiledCamera, switchProfiledCamera } from '$lib/camera';
+  import { formatCaseSubject, hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
 
   type PendingImageCase = {
@@ -766,8 +767,15 @@
         {#each cases as pending}
           <article class="pending-case-card" class:selected={pending.case_id === selectedCaseId}>
             <h2>Case #{pending.case_id}</h2>
-            <p><strong>Child:</strong> {pending.metadata.child_name}</p>
-            <p><strong>Animal:</strong> {pending.metadata.animal_name}</p>
+            {#if hasText(pending.metadata.child_name)}
+              <p><strong>Child:</strong> {pending.metadata.child_name}</p>
+            {/if}
+            {#if hasText(pending.metadata.animal_name)}
+              <p><strong>Animal:</strong> {pending.metadata.animal_name}</p>
+            {/if}
+            {#if isQrOnlyCase(pending.metadata)}
+              <p><strong>Mode:</strong> QR-only fast-track</p>
+            {/if}
             <p><strong>QR:</strong> {pending.metadata.qr_content}</p>
             <div class="case-actions">
               <button
@@ -793,7 +801,7 @@
     {#if selectedCase}
       <p>
         Capturing for <strong>Case #{selectedCase.case_id}</strong>
-        ({selectedCase.metadata.child_name} / {selectedCase.metadata.animal_name})
+        ({formatCaseSubject(selectedCase.metadata)})
       </p>
     {:else}
       <p>Select a pending case to upload an image.</p>

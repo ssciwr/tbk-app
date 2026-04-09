@@ -467,6 +467,12 @@ def _apply_watermark(
     return composited.convert("RGB")
 
 
+def _should_apply_watermark(job: Job, *, no_watermark: bool) -> bool:
+    if no_watermark:
+        return False
+    return bool(job.animal_name.strip()) and bool(job.child_name.strip())
+
+
 def _validate_parameters(
     workflow: WorkflowBase, parameters: dict[str, Any]
 ) -> dict[str, Any]:
@@ -565,7 +571,9 @@ def run_runner(
                     for submitted_count, image in enumerate(generated_images, start=1):
                         output_image = (
                             image
-                            if no_watermark
+                            if not _should_apply_watermark(
+                                job, no_watermark=no_watermark
+                            )
                             else _apply_watermark(
                                 image,
                                 job.animal_name,

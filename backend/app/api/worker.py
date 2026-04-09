@@ -34,8 +34,10 @@ async def worker_next_job(
 
     response = Response(content=case.original_bytes, media_type="image/png")
     response.headers["X-Case-Id"] = str(case.case_id)
-    response.headers["X-Child-Name"] = case.metadata.child_name
-    response.headers["X-Animal-Name"] = case.metadata.animal_name
+    if case.metadata.child_name:
+        response.headers["X-Child-Name"] = case.metadata.child_name
+    if case.metadata.animal_name:
+        response.headers["X-Animal-Name"] = case.metadata.animal_name
     if case.metadata.animal_type:
         response.headers["X-Animal-Type"] = case.metadata.animal_type
     response.headers["X-Requested-Images"] = str(case.expected_results)

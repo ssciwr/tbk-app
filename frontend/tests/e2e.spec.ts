@@ -24,6 +24,42 @@ test('login flow stores token and redirects to patient data stage', async ({ pag
   await expect(page.getByText('Patient Data & QR Scan')).toBeVisible();
 });
 
+test('patient data stage allows fast-track submission with QR only', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  let createCalls = 0;
+  await page.route('**/api/cases', async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+
+    createCalls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ case_id: 99 })
+    });
+  });
+
+  await page.route('**/api/cases/pending-image', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [] }) });
+  });
+
+  await page.goto('/patient-data');
+  await page.getByLabel('QR content').fill('qr-fast-track');
+  await page.getByRole('button', { name: 'Save Patient Data' }).click();
+
+  await expect.poll(() => createCalls).toBe(1);
+  await expect(page).toHaveURL(/\/camera$/);
+});
+
 test('patient data stage only creates one case while save is in flight', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
@@ -122,6 +158,61 @@ test('results page supports confirm decision', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Accept' }).first().click();
   await expect(page).toHaveURL(/\/fracture$/);
+});
+
+test('results page resolves relative protected image URLs in same-origin mode', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  let originalFetches = 0;
+  let xrayFetches = 0;
+
+  await page.route('**/api/carousel', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            case_id: 3,
+            metadata: {
+              child_name: 'Ada',
+              animal_name: 'Bunny',
+              qr_content: 'qr-3',
+              broken_bone: false
+            },
+            original_url: '/api/carousel/0/original',
+            xray_url: '/api/carousel/0/xray',
+            approved_at: '2026-04-09T10:00:00Z'
+          }
+        ],
+        max_items: 10,
+        autoplay_interval_seconds: 10
+      })
+    });
+  });
+
+  await page.route('**/api/carousel/0/original', async (route) => {
+    originalFetches += 1;
+    await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(TINY_PNG.split(',')[1], 'base64') });
+  });
+
+  await page.route('**/api/carousel/0/xray', async (route) => {
+    xrayFetches += 1;
+    await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from(TINY_PNG.split(',')[1], 'base64') });
+  });
+
+  await page.goto('/results');
+
+  await expect(page.getByText('Case: #3')).toBeVisible();
+  await expect.poll(() => originalFetches).toBe(1);
+  await expect.poll(() => xrayFetches).toBe(1);
+  await expect(page.getByRole('img', { name: 'Case X-Ray' })).toBeVisible();
 });
 
 test('admin QR page ignores stale status responses from an older job', async ({ page }) => {

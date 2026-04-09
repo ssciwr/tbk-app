@@ -4,6 +4,7 @@ import { clearStoredCameraSelections } from '$lib/camera';
 
 const BASE = (env.PUBLIC_BACKEND_URL || '').trim().replace(/\/$/, '');
 const TOKEN_KEY = 'teddy_hospital_jwt';
+const ABSOLUTE_URL_PATTERN = /^[a-z][a-z\d+\-.]*:/i;
 const initialToken =
   typeof window === 'undefined' ? null : window.localStorage.getItem(TOKEN_KEY);
 
@@ -38,6 +39,27 @@ export function apiUrl(path: string): string {
     return path;
   }
   return `${BASE}${path}`;
+}
+
+export function resolveFetchUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (ABSOLUTE_URL_PATTERN.test(trimmed) || trimmed.startsWith('//')) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith('/')) {
+    return apiUrl(trimmed);
+  }
+
+  if (!BASE) {
+    return trimmed;
+  }
+
+  return new URL(trimmed, `${BASE}/`).toString();
 }
 
 export function getToken(): string | null {
@@ -75,7 +97,7 @@ export async function authedFetchUrl(url: string, init: RequestInit = {}): Promi
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  return fetch(url, { ...init, headers });
+  return fetch(resolveFetchUrl(url), { ...init, headers });
 }
 
 export function getCachedAppConfig(): AppConfig {

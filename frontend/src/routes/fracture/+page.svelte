@@ -3,6 +3,7 @@
   import { onDestroy, onMount } from 'svelte';
   import FractureEditorInline from '$lib/components/FractureEditorInline.svelte';
   import { authedFetch, authedFetchUrl, loadAppConfig } from '$lib/api';
+  import { formatCaseSubject, hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
 
   type FinalizeAction = 'proceed_without_breaking' | 'apply_bone_breaking';
@@ -162,11 +163,18 @@
       {#each cases as pending}
         <article class="card fracture-card">
           <h2>Case #{pending.case_id}</h2>
-          <p><strong>Child:</strong> {pending.metadata.child_name}</p>
-          <p><strong>Animal:</strong> {pending.metadata.animal_name}</p>
+          {#if hasText(pending.metadata.child_name)}
+            <p><strong>Child:</strong> {pending.metadata.child_name}</p>
+          {/if}
+          {#if hasText(pending.metadata.animal_name)}
+            <p><strong>Animal:</strong> {pending.metadata.animal_name}</p>
+          {/if}
+          {#if isQrOnlyCase(pending.metadata)}
+            <p><strong>Mode:</strong> QR-only fast-track</p>
+          {/if}
           <FractureEditorInline
             caseId={pending.case_id}
-            caseLabel={`${pending.metadata.child_name} / ${pending.metadata.animal_name}`}
+            caseLabel={formatCaseSubject(pending.metadata)}
             imageSrc={pending.selected_url}
             busy={decidingCaseId === pending.case_id}
             onFinalize={(request) => void decide(pending.case_id, request)}

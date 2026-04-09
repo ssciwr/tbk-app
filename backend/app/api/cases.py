@@ -14,22 +14,26 @@ router = APIRouter(tags=["cases"])
 
 @router.post("/cases")
 async def create_case(
-    child_name: Annotated[str, Form(...)],
-    animal_name: Annotated[str, Form(...)],
     qr_content: Annotated[str, Form(...)],
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
+    child_name: Annotated[str | None, Form()] = None,
+    animal_name: Annotated[str | None, Form()] = None,
     animal_type: Annotated[str | None, Form()] = None,
     broken_bone: Annotated[bool, Form()] = False,
 ) -> dict[str, int | str]:
+    owner_ref = qr_content.strip()
+    if not owner_ref:
+        raise HTTPException(status_code=400, detail="QR content is required")
+
     metadata = CaseMetadata(
-        child_name=child_name.strip(),
-        animal_name=animal_name.strip(),
+        child_name=(child_name or "").strip(),
+        animal_name=(animal_name or "").strip(),
         animal_type=(animal_type or "").strip(),
     )
 
     case = services.queue.enqueue_case(
-        owner_ref=qr_content.strip(),
+        owner_ref=owner_ref,
         metadata=metadata,
         broken_bone=broken_bone,
     )
