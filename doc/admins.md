@@ -14,7 +14,7 @@ If you do not have 80GB of VRAM, there is possibilities to split this up onto mu
 * You can switch to a cheaper/quantized VLM
 * You can use a cloud-hosted VLM, any OpenAI-compatible API works. This will also be much more cost effective - we did not do it, because we ran into problems with rate limiting on the mistral.ai free tier.
 * You can distribute VLM and generation to different devices
-* You could do Chroma-based X-Ray Style Adaptation (removing the necessity to load two different image generation models)
+* The current Chroma workflow already applies the X-Ray LoRA directly, so only one image generation pipeline needs to stay resident.
 
 ## Virtual machine Setup
 
@@ -65,7 +65,7 @@ Next we need to ensure that we have all required models downloaded and placed in
 
 * `chroma-unlocked-v44-detail-calibrated.safetensors` from [lodestones/Chroma](https://huggingface.co/lodestones/Chroma/tree/main). Note that in the meantime, the Chroma-1 model has released and it is not strictly required to load from a checkpoint anymore. However, we did not want to change the pipeline we have had good experiences with without detailed analysis of the results.
 * `Hyper-Chroma-Turbo-Alpha-16steps-lora.safetensors` from https://www.runninghub.ai/model/public/1931558060911996929
-* `DD-xray-v1.safetensors` from https://civitai.com/models/231655/xray-xl-lora
+* `x-ray_schnell_v3.safetensors` from your selected Flux Schnell X-Ray LoRA source
 
 
 You can then run the generation service with the `tbk-runner` executable. An overview of options:

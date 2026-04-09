@@ -264,7 +264,6 @@ def test_chroma_setup_initializes_only_single_rembg_session(
     )
 
     session_models: list[str] = []
-    fake_sdxl_pipe = object()
     monkeypatch.setattr(chroma_module, "_CHROMA_IMPORT_ERROR", None)
     monkeypatch.setattr(chroma_module, "torch", object())
     monkeypatch.setattr(
@@ -287,18 +286,120 @@ def test_chroma_setup_initializes_only_single_rembg_session(
         "load_pipeline",
         lambda **_kwargs: _PipelineWithTo(),
     )
-    monkeypatch.setattr(
-        chroma_module,
-        "load_sdxl_style_pipeline",
-        lambda **_kwargs: fake_sdxl_pipe,
-    )
 
     workflow.setup()
 
     assert session_models == ["u2net"]
 
 
-def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
+def test_chroma_build_generation_prompt_prefixes_xray_trigger() -> None:
+    chroma_module = runner_module.chroma
+
+    prompt = chroma_module.build_generation_prompt("generated prompt")
+
+    assert prompt == "x-ray, generated prompt"
+
+
+def test_chroma_load_pipeline_loads_both_loras(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.setattr(chroma_module, "_CHROMA_IMPORT_ERROR", None)
+
+    transformer_file = tmp_path / "chroma-transformer.safetensors"
+    chroma_lora_file = tmp_path / "chroma-lora.safetensors"
+    xray_lora_file = tmp_path / "x-ray_schnell_v3.safetensors"
+    transformer_file.write_bytes(b"transformer")
+    chroma_lora_file.write_bytes(b"chroma")
+    xray_lora_file.write_bytes(b"xray")
+
+    resolved_files = {
+        chroma_module.TRANSFORMER_PATH: str(transformer_file),
+        chroma_module.LORA_PATH: str(chroma_lora_file),
+        chroma_module.XRAY_LORA_PATH: str(xray_lora_file),
+    }
+    monkeypatch.setattr(
+        chroma_module,
+        "_resolve_workflow_file",
+        lambda raw_value, **_kwargs: resolved_files[raw_value],
+    )
+
+    class _FakeTransformer:
+        @classmethod
+        def from_single_file(cls, path: str, torch_dtype: Any) -> str:
+            assert path == resolved_files[chroma_module.TRANSFORMER_PATH]
+            assert torch_dtype == "float32"
+            return "transformer"
+
+    class _FakePipeline:
+        load_calls: list[dict[str, Any]]
+        set_calls: list[tuple[list[str], list[float]]]
+        fuse_calls: list[dict[str, Any]]
+
+        def __init__(self) -> None:
+            self.load_calls = []
+            self.set_calls = []
+            self.fuse_calls = []
+
+        def load_lora_weights(self, path: str, **kwargs: Any) -> None:
+            self.load_calls.append({"path": path, **kwargs})
+
+        def set_adapters(
+            self,
+            adapter_names: list[str],
+            adapter_weights: list[float],
+        ) -> None:
+            self.set_calls.append((adapter_names, adapter_weights))
+
+        def fuse_lora(self, **kwargs: Any) -> None:
+            self.fuse_calls.append(kwargs)
+
+        @classmethod
+        def from_pretrained(
+            cls,
+            model_id: str,
+            torch_dtype: Any,
+            transformer: Any,
+        ) -> "_FakePipeline":
+            assert model_id == "lodestones/Chroma"
+            assert torch_dtype == "float32"
+            assert transformer == "transformer"
+            return cls()
+
+    monkeypatch.setattr(chroma_module, "ChromaTransformer2DModel", _FakeTransformer)
+    monkeypatch.setattr(chroma_module, "ChromaImg2ImgPipeline", _FakePipeline)
+
+    pipe = chroma_module.load_pipeline(dtype="float32")
+
+    assert isinstance(pipe, _FakePipeline)
+    assert pipe.load_calls == [
+        {
+            "path": str(tmp_path),
+            "weight_name": "chroma-lora.safetensors",
+            "adapter_name": "chroma",
+        },
+        {
+            "path": str(tmp_path),
+            "weight_name": "x-ray_schnell_v3.safetensors",
+            "adapter_name": "xray",
+        },
+    ]
+    assert pipe.set_calls == [
+        (
+            ["chroma", "xray"],
+            [chroma_module.LORA_SCALE, chroma_module.XRAY_LORA_SCALE],
+        )
+    ]
+    assert pipe.fuse_calls == [
+        {
+            "lora_scale": 1.0,
+            "adapter_names": ["chroma", "xray"],
+        }
+    ]
+
+
+def test_chroma_generate_runs_single_chroma_pass_and_reuses_first_cutout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     chroma_module = runner_module.chroma
@@ -332,21 +433,10 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
         monochrome_input.append(image)
         return Image.new("RGB", (1024, 1024), color=(1, 2, 3))
 
-    def _fake_second_pass(*_args: Any, **_kwargs: Any) -> Image.Image:
-        raise AssertionError("second rembg pass should not run")
-
     class _FakePipeline:
         def __call__(self, **kwargs: Any) -> Any:
+            assert kwargs["prompt"] == "x-ray, generated prompt"
             assert kwargs["image"].getpixel((0, 0)) == (1, 2, 3)
-            return type(
-                "_Result",
-                (),
-                {"images": [Image.new("RGB", (1024, 1024), color=(4, 5, 6))]},
-            )()
-
-    class _FakeSdxlPipeline:
-        def __call__(self, **kwargs: Any) -> Any:
-            assert kwargs["image"].getpixel((0, 0)) == (4, 5, 6)
             return type(
                 "_Result",
                 (),
@@ -354,7 +444,6 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
             )()
 
     workflow._pipe = _FakePipeline()
-    workflow._sdxl_pipe = _FakeSdxlPipeline()
 
     monkeypatch.setattr(chroma_module, "remove_background_first_pass", _fake_first_pass)
     monkeypatch.setattr(
@@ -375,12 +464,6 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
         "generate_prompt_with_openai_compatible",
         lambda **_kwargs: "generated prompt",
     )
-    monkeypatch.setattr(
-        chroma_module,
-        "remove_background_second_pass",
-        _fake_second_pass,
-        raising=False,
-    )
 
     outputs = list(
         workflow.generate(
@@ -398,8 +481,7 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
         "02_first_pass_no_background.png",
         "03_monochrome_init_image.png",
         "04_chroma_generated_01.png",
-        "05_sdxl_rewrite_01.png",
-        "06_final_output_01.png",
+        "05_final_output_01.png",
     ]
     assert len(outputs) == 1
     assert outputs[0].mode == "RGB"

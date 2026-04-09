@@ -25,7 +25,6 @@ from .core import WorkflowBase
 try:
     import torch
     from diffusers import (
-        AutoPipelineForImage2Image,
         ChromaImg2ImgPipeline,
         ChromaTransformer2DModel,
     )
@@ -33,7 +32,6 @@ try:
     from rembg import new_session, remove
 except ImportError as exc:
     torch = None  # type: ignore[assignment]
-    AutoPipelineForImage2Image = None  # type: ignore[assignment]
     ChromaImg2ImgPipeline = None  # type: ignore[assignment]
     ChromaTransformer2DModel = None  # type: ignore[assignment]
     OpenAI = None  # type: ignore[assignment]
@@ -79,20 +77,14 @@ VLM_TIMEOUT_SECONDS = 120.0
 TRANSFORMER_PATH = "chroma-unlocked-v44-detail-calibrated.safetensors"
 LORA_PATH = "Hyper-Chroma-Turbo-Alpha-16steps-lora.safetensors"
 LORA_SCALE = 0.49
+XRAY_LORA_PATH = "x-ray_schnell_v3.safetensors"
+XRAY_LORA_SCALE = 1.0
+XRAY_TRIGGER_WORD = "x-ray"
 DTYPE = "auto"
 NUM_INFERENCE_STEPS = 15
 GUIDANCE_SCALE = 4.0
 IMG2IMG_DENOISE_STRENGTH = 0.8
 NEGATIVE_PROMPT = "illustration, anime, drawing, artwork, bad hands, blurry, low quality, out of focus, deformed, smudged, red"
-
-# SDXL X-Ray Style Rewrite
-SDXL_MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"
-SDXL_LORA_PATH = "DD-xray-v1.safetensors"
-SDXL_LORA_SCALE = 0.8
-SDXL_STRENGTH = 0.4
-SDXL_GUIDANCE_SCALE = 5.0
-SDXL_NUM_INFERENCE_STEPS = 15
-SDXL_PROMPT = "xray"
 DEBUG_OUTPUT_DIR_NAME = "debug-output"
 FIRST_PASS_ALPHA_TIMEOUT_SECONDS = 120.0
 FIRST_PASS_WATCHDOG_POLL_SECONDS = 0.2
@@ -533,6 +525,40 @@ def add_monochrome_background(image: Image.Image) -> Image.Image:
     ).convert("RGB")
 
 
+def _load_lora_weights(
+    pipe: Any,
+    raw_value: str,
+    *,
+    description: str,
+    adapter_name: str,
+) -> None:
+    lora_reference = _resolve_workflow_file(
+        raw_value,
+        description=description,
+    )
+    lora_path = Path(lora_reference)
+    if lora_path.is_file():
+        pipe.load_lora_weights(
+            str(lora_path.parent),
+            weight_name=lora_path.name,
+            adapter_name=adapter_name,
+        )
+    else:
+        pipe.load_lora_weights(
+            lora_reference,
+            adapter_name=adapter_name,
+        )
+
+
+def build_generation_prompt(vlm_prompt: str) -> str:
+    normalized = vlm_prompt.strip()
+    if not normalized:
+        raise ValueError("Missing VLM prompt text.")
+    if normalized.lower().startswith(XRAY_TRIGGER_WORD):
+        return normalized
+    return f"{XRAY_TRIGGER_WORD}, {normalized}"
+
+
 def load_pipeline(dtype: Any) -> Any:
     _require_chroma_dependencies()
     assert ChromaTransformer2DModel is not None
@@ -541,10 +567,6 @@ def load_pipeline(dtype: Any) -> Any:
     transformer_path = _resolve_workflow_file(
         TRANSFORMER_PATH,
         description="chroma transformer",
-    )
-    lora_reference = _resolve_workflow_file(
-        LORA_PATH,
-        description="chroma LoRA",
     )
     transformer = ChromaTransformer2DModel.from_single_file(
         transformer_path,
@@ -555,36 +577,26 @@ def load_pipeline(dtype: Any) -> Any:
         torch_dtype=dtype,
         transformer=transformer,
     )
-    lora_path = Path(lora_reference)
-    if lora_path.is_file():
-        pipe.load_lora_weights(str(lora_path.parent), weight_name=lora_path.name)
-    else:
-        pipe.load_lora_weights(lora_reference)
-    pipe.fuse_lora(lora_scale=LORA_SCALE)
-    return pipe
-
-
-def load_sdxl_style_pipeline(dtype: Any, device: str) -> Any:
-    _require_chroma_dependencies()
-    assert AutoPipelineForImage2Image is not None
-
-    pipe = AutoPipelineForImage2Image.from_pretrained(
-        SDXL_MODEL_ID,
-        torch_dtype=dtype,
+    _load_lora_weights(
+        pipe,
+        LORA_PATH,
+        description="chroma LoRA",
+        adapter_name="chroma",
     )
-
-    sdxl_lora_reference = _resolve_workflow_file(
-        SDXL_LORA_PATH,
-        description="SDXL LoRA",
+    _load_lora_weights(
+        pipe,
+        XRAY_LORA_PATH,
+        description="x-ray LoRA",
+        adapter_name="xray",
     )
-    lora_path = Path(sdxl_lora_reference)
-    if lora_path.is_file():
-        pipe.load_lora_weights(str(lora_path.parent), weight_name=lora_path.name)
-    else:
-        pipe.load_lora_weights(sdxl_lora_reference)
-
-    pipe.fuse_lora(lora_scale=SDXL_LORA_SCALE)
-    pipe.to(device)
+    pipe.set_adapters(
+        ["chroma", "xray"],
+        adapter_weights=[LORA_SCALE, XRAY_LORA_SCALE],
+    )
+    pipe.fuse_lora(
+        lora_scale=1.0,
+        adapter_names=["chroma", "xray"],
+    )
     return pipe
 
 
@@ -751,7 +763,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._torch: Any = None
         self._first_pass_session: Any = None
         self._pipe: Any = None
-        self._sdxl_pipe: Any = None
 
     def configure(self, **kwargs: Any) -> None:
         vlm_server = kwargs.get("vlm_server")
@@ -788,14 +799,12 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._first_pass_session = new_session(model_name="u2net")
         self._pipe = load_pipeline(dtype=dtype)
         self._pipe.to(device)
-        self._sdxl_pipe = load_sdxl_style_pipeline(dtype=dtype, device=device)
 
     def _assert_ready(self) -> None:
         if (
             self._torch is None
             or self._device is None
             or self._pipe is None
-            or self._sdxl_pipe is None
             or self._first_pass_session is None
         ):
             raise RuntimeError(
@@ -819,7 +828,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
     ) -> Generator[Image.Image, None, None]:
         self._assert_ready()
         assert self._pipe is not None
-        assert self._sdxl_pipe is not None
         assert self._first_pass_session is not None
         workflow_parameters = parameters or {}
         animal_type_hint = _normalize_animal_type_hint(
@@ -860,7 +868,7 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             animal_type_hint=animal_type_hint
         )
 
-        final_prompt = generate_prompt_with_openai_compatible(
+        vlm_prompt = generate_prompt_with_openai_compatible(
             image=first_rembg_image,
             instruction=prompt_instruction,
             base_url=normalized_vlm_server,
@@ -869,16 +877,18 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             temperature=VLM_TEMPERATURE,
             timeout=VLM_TIMEOUT_SECONDS,
         )
+        generation_prompt = build_generation_prompt(vlm_prompt)
         logging.info("VLM prompt generation completed.")
-        logging.debug("VLM generated prompt: %s", final_prompt)
-        _write_debug_prompt(debug_dir, final_prompt)
+        logging.debug("VLM generated prompt: %s", vlm_prompt)
+        logging.debug("Chroma generation prompt: %s", generation_prompt)
+        _write_debug_prompt(debug_dir, generation_prompt)
 
         init_image = add_monochrome_background(first_rembg_image)
         _write_debug_image(debug_dir, "03_monochrome_init_image.png", init_image)
         for index in range(max(num_images, 0)):
             generator = self._new_generator()
             generated = self._pipe(
-                prompt=final_prompt,
+                prompt=generation_prompt,
                 negative_prompt=NEGATIVE_PROMPT,
                 image=init_image,
                 width=IMAGE_WIDTH,
@@ -893,24 +903,10 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
                 f"04_chroma_generated_{index + 1:02d}.png",
                 generated,
             )
-
-            sdxl_result = self._sdxl_pipe(
-                prompt=SDXL_PROMPT,
-                image=generated,
-                strength=SDXL_STRENGTH,
-                guidance_scale=SDXL_GUIDANCE_SCALE,
-                num_inference_steps=SDXL_NUM_INFERENCE_STEPS,
-                generator=generator,
-            ).images[0]
+            final_image = generated.convert("L").convert("RGB")
             _write_debug_image(
                 debug_dir,
-                f"05_sdxl_rewrite_{index + 1:02d}.png",
-                sdxl_result,
-            )
-            final_image = sdxl_result.convert("L").convert("RGB")
-            _write_debug_image(
-                debug_dir,
-                f"06_final_output_{index + 1:02d}.png",
+                f"05_final_output_{index + 1:02d}.png",
                 final_image,
             )
             yield final_image

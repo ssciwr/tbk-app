@@ -13,6 +13,6 @@ This directory is the default lookup location for bare filenames used by the Chr
 3. `Hyper-Chroma-Turbo-Alpha-16steps-lora.safetensors`
    - Chroma LoRA weights.
    - Referenced in `runner/src/runner/chroma.py`.
-4. `your_sdxl_lora.safetensors`
-   - SDXL style LoRA weights (default filename).
+4. `x-ray_schnell_v3.safetensors`
+   - X-Ray LoRA weights loaded directly into the Chroma pipeline.
    - Referenced in `runner/src/runner/chroma.py`.

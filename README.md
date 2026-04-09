@@ -28,6 +28,5 @@ The web app, as well as the runner are provided under the terms of the MIT licen
 **Please note that this application is only meant to be used on plush toys. Usage with other images might violate the licensing terms of the used models.**
 
 Licenses of the used models:
-* [SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0): CreativeML Open RAIL-M License
 * [Chroma](https://huggingface.co/lodestones/Chroma/tree/main): Apache 2.0 License
-* [X-Ray XL LoRA](civitai.com/models/231655/xray-xl-lora): See civit.ai for exact terms
+* The X-Ray LoRA used by the runner is loaded from `x-ray_schnell_v3.safetensors`; check the source/model documentation for its exact license terms.
