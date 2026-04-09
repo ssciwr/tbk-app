@@ -160,6 +160,56 @@ test('results page supports confirm decision', async ({ page }) => {
   await expect(page).toHaveURL(/\/fracture$/);
 });
 
+test('review page sends edited animal hint with retry', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  let pendingCalls = 0;
+  await page.route('**/api/review/pending', async (route) => {
+    pendingCalls += 1;
+    const body =
+      pendingCalls === 1
+        ? {
+            cases: [
+              {
+                case_id: 1,
+                metadata: {
+                  child_name: 'Ada',
+                  animal_name: 'Teddy',
+                  animal_type: '',
+                  broken_bone: false
+                },
+                original_url: TINY_PNG,
+                result_urls: [TINY_PNG],
+                results_per_image: 1
+              }
+            ]
+          }
+        : { cases: [] };
+
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
+
+  let retryPayload: { action?: string; animal_type?: string | null } | null = null;
+  await page.route('**/api/review/1/decision', async (route, request) => {
+    retryPayload = JSON.parse(request.postData() ?? '{}') as { action?: string; animal_type?: string | null };
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'success' }) });
+  });
+
+  await page.goto('/review');
+  await page.getByLabel('Animal hint for case 1').fill('  red fox  ');
+  await page.getByRole('button', { name: 'Retry generation' }).click();
+
+  await expect.poll(() => retryPayload?.action).toBe('retry');
+  await expect.poll(() => retryPayload?.animal_type).toBe('red fox');
+  await expect(page.getByText('Case 1: retry applied.')).toBeVisible();
+});
+
 test('results page resolves relative protected image URLs in same-origin mode', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');

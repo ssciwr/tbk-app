@@ -240,7 +240,7 @@ async def test_review_retry_and_cancel_transitions(
     retry = await client.post(
         f"/api/review/{retry_case_id}/decision",
         headers=auth_headers,
-        json={"action": "retry", "choice_index": None},
+        json={"action": "retry", "choice_index": None, "animal_type": "otter"},
     )
     assert retry.status_code == 200
 
@@ -248,6 +248,7 @@ async def test_review_retry_and_cancel_transitions(
     job = await client.get("/api/worker/jobs/next", headers=auth_headers)
     assert job.status_code == 200
     assert int(job.headers["X-Case-Id"]) == retry_case_id
+    assert job.headers["X-Animal-Type"] == "otter"
 
     cancel_case_id = await _create_case_ready_for_review(
         client, auth_headers, png_bytes

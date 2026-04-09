@@ -15,6 +15,7 @@ router = APIRouter(prefix="/review", tags=["review"])
 class ReviewDecisionRequest(BaseModel):
     action: Literal["confirm", "retry", "cancel"]
     choice_index: int | None = None
+    animal_type: str | None = None
 
 
 @router.get("/pending")
@@ -118,7 +119,7 @@ async def review_decision(
                 )
                 next_stage = "results"
         elif payload.action == "retry":
-            services.queue.retry_case(case_id)
+            services.queue.retry_case(case_id, animal_type=payload.animal_type)
             next_stage = "review"
         else:
             services.queue.cancel_case(case_id)

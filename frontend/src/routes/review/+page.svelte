@@ -25,13 +25,16 @@
     original_url: string | null;
     result_urls: Array<string | null>;
   };
+  type ReviewAction = 'confirm' | 'retry' | 'cancel';
 
   let cases: PendingCase[] = [];
   let loading = true;
   let error = '';
   let actionMessage = '';
+  let decidingCaseId: number | null = null;
   let pollHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
+  let animalTypeDrafts: Record<number, string> = {};
 
   function revokeObjectUrls(urls: string[]): void {
     for (const url of urls) {
@@ -80,6 +83,21 @@
     return Array.from({ length: pending.results_per_image }, (_, index) => pending.result_urls[index] ?? null);
   }
 
+  function syncAnimalTypeDrafts(nextCases: PendingCase[]): void {
+    const nextDrafts: Record<number, string> = {};
+    for (const pending of nextCases) {
+      nextDrafts[pending.case_id] = animalTypeDrafts[pending.case_id] ?? pending.metadata.animal_type ?? '';
+    }
+    animalTypeDrafts = nextDrafts;
+  }
+
+  function updateAnimalTypeDraft(caseId: number, value: string): void {
+    animalTypeDrafts = {
+      ...animalTypeDrafts,
+      [caseId]: value
+    };
+  }
+
   async function loadPending(): Promise<void> {
     const response = await authedFetch('/api/review/pending');
     if (!response.ok) {
@@ -96,46 +114,63 @@
     const previousObjectUrls = activeObjectUrls;
     activeObjectUrls = nextObjectUrls;
     revokeObjectUrls(previousObjectUrls);
+    syncAnimalTypeDrafts(hydratedCases);
     cases = hydratedCases;
     loading = false;
   }
 
   async function decide(
     caseId: number,
-    action: 'confirm' | 'retry' | 'cancel',
+    action: ReviewAction,
     choiceIndex: number | null
   ): Promise<void> {
     actionMessage = '';
-    const requestPayload = { action, choice_index: choiceIndex };
+    decidingCaseId = caseId;
 
-    const response = await authedFetch(`/api/review/${caseId}/decision`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload)
-    });
+    const requestPayload: {
+      action: ReviewAction;
+      choice_index: number | null;
+      animal_type?: string;
+    } = { action, choice_index: choiceIndex };
 
-    if (!response.ok) {
-      actionMessage = `Failed to ${action} case ${caseId}.`;
-      return;
+    if (action === 'retry') {
+      const trimmedAnimalType = (animalTypeDrafts[caseId] ?? '').trim();
+      updateAnimalTypeDraft(caseId, trimmedAnimalType);
+      requestPayload.animal_type = trimmedAnimalType;
     }
 
-    let nextStage: 'fracture' | 'results' | undefined;
     try {
-      const payload = (await response.json()) as { next_stage?: string };
-      if (payload.next_stage === 'fracture' || payload.next_stage === 'results') {
-        nextStage = payload.next_stage;
+      const response = await authedFetch(`/api/review/${caseId}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPayload)
+      });
+
+      if (!response.ok) {
+        actionMessage = `Failed to ${action} case ${caseId}.`;
+        return;
       }
-    } catch {
-      // Keep default transition when no payload is available.
-    }
 
-    if (action === 'confirm') {
-      await goto(nextStage === 'results' ? '/results' : '/fracture');
-      return;
-    }
+      let nextStage: 'fracture' | 'results' | undefined;
+      try {
+        const payload = (await response.json()) as { next_stage?: string };
+        if (payload.next_stage === 'fracture' || payload.next_stage === 'results') {
+          nextStage = payload.next_stage;
+        }
+      } catch {
+        // Keep default transition when no payload is available.
+      }
 
-    actionMessage = `Case ${caseId}: ${action} applied.`;
-    await loadPending();
+      if (action === 'confirm') {
+        await goto(nextStage === 'results' ? '/results' : '/fracture');
+        return;
+      }
+
+      actionMessage = `Case ${caseId}: ${action} applied.`;
+      await loadPending();
+    } finally {
+      decidingCaseId = null;
+    }
   }
 
   onMount(async () => {
@@ -196,13 +231,32 @@
                   </p>
                 {/if}
                 <div class="meta-actions">
+                  <label class="animal-hint-field">
+                    <span>Animal type hint:</span>
+                    <input
+                      type="text"
+                      value={animalTypeDrafts[pending.case_id] ?? pending.metadata.animal_type ?? ''}
+                      placeholder="e.g. fox, bunny, otter"
+                      aria-label={`Animal hint for case ${pending.case_id}`}
+                      on:input={(event) =>
+                        updateAnimalTypeDraft(pending.case_id, (event.currentTarget as HTMLInputElement).value)}
+                      disabled={decidingCaseId === pending.case_id}
+                    />
+                  </label>
+                  <div class="retry-row">
+                    <button
+                      class="secondary"
+                      on:click={() => decide(pending.case_id, 'retry', null)}
+                      disabled={decidingCaseId === pending.case_id}
+                    >
+                      Retry generation
+                    </button>
+                  </div>
                   <button
-                    class="secondary"
-                    on:click={() => decide(pending.case_id, 'retry', null)}
+                    class="warn"
+                    on:click={() => decide(pending.case_id, 'cancel', null)}
+                    disabled={decidingCaseId === pending.case_id}
                   >
-                    Retry generation
-                  </button>
-                  <button class="warn" on:click={() => decide(pending.case_id, 'cancel', null)}>
                     Discard Case
                   </button>
                 </div>
@@ -229,7 +283,13 @@
                   <article class="candidate-card">
                     {#if resultUrl}
                       <img class="preview candidate-image" src={resultUrl} alt={`Result ${index} for case ${pending.case_id}`} />
-                      <button class="ok" on:click={() => decide(pending.case_id, 'confirm', index)}>Accept</button>
+                      <button
+                        class="ok"
+                        on:click={() => decide(pending.case_id, 'confirm', index)}
+                        disabled={decidingCaseId === pending.case_id}
+                      >
+                        Accept
+                      </button>
                     {:else}
                       <div class="preview-frame">Image currently generating</div>
                     {/if}
@@ -290,10 +350,29 @@
     margin-top: 0.35rem;
     display: grid;
     gap: 0.45rem;
-    max-width: 220px;
+    max-width: 320px;
   }
 
   .meta-actions button {
+    width: 100%;
+  }
+
+  .animal-hint-field {
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .animal-hint-field span {
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .retry-row {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .retry-row button {
     width: 100%;
   }
 

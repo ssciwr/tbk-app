@@ -279,7 +279,7 @@ class CaseQueue:
             case.results.clear()
             case.selected_result_bytes = None
 
-    def retry_case(self, case_id: int) -> None:
+    def retry_case(self, case_id: int, *, animal_type: str | None = None) -> None:
         with self._lock:
             case = self._cases.get(case_id)
             if case is None:
@@ -291,6 +291,9 @@ class CaseQueue:
                 CaseState.AWAITING_REVIEW,
             }:
                 raise ValueError("Case cannot be retried in its current state")
+
+            if animal_type is not None:
+                case.metadata.animal_type = animal_type.strip()
 
             case.results.clear()
             case.selected_result_bytes = None
