@@ -12,6 +12,7 @@
   let qrContent = '';
 
   let submitMessage = '';
+  let submitting = false;
   let cameraError = '';
   let switchingCamera = false;
 
@@ -134,26 +135,37 @@
 
   async function submitCaseMetadata(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    submitMessage = '';
-
-    const form = new FormData();
-    form.append('child_name', childName);
-    form.append('animal_name', animalName);
-    form.append('animal_type', animalType);
-    form.append('qr_content', qrContent);
-
-    const response = await authedFetch('/api/cases', {
-      method: 'POST',
-      body: form
-    });
-
-    if (!response.ok) {
-      submitMessage = 'Failed to create case metadata.';
+    if (submitting) {
       return;
     }
 
-    await response.json();
-    await goto('/camera');
+    submitMessage = '';
+    submitting = true;
+
+    try {
+      const form = new FormData();
+      form.append('child_name', childName);
+      form.append('animal_name', animalName);
+      form.append('animal_type', animalType);
+      form.append('qr_content', qrContent);
+
+      const response = await authedFetch('/api/cases', {
+        method: 'POST',
+        body: form
+      });
+
+      if (!response.ok) {
+        submitMessage = 'Failed to create case metadata.';
+        return;
+      }
+
+      await response.json();
+      await goto('/camera');
+    } catch {
+      submitMessage = 'Failed to create case metadata.';
+    } finally {
+      submitting = false;
+    }
   }
 
   onMount(async () => {
@@ -226,7 +238,9 @@
         <input bind:value={qrContent} required placeholder="Auto-filled when QR is detected" />
       </label>
 
-      <button type="submit">Save Patient Data</button>
+      <button type="submit" disabled={submitting}>
+        {submitting ? 'Saving patient data...' : 'Save Patient Data'}
+      </button>
     </form>
 
     {#if submitMessage}

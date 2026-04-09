@@ -24,6 +24,58 @@ test('login flow stores token and redirects to patient data stage', async ({ pag
   await expect(page.getByText('Patient Data & QR Scan')).toBeVisible();
 });
 
+test('patient data stage only creates one case while save is in flight', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  let createCalls = 0;
+  let releaseCreate: (() => void) | undefined;
+  const createBlocked = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+
+  await page.route('**/api/cases', async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+
+    createCalls += 1;
+    await createBlocked;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ case_id: 42 })
+    });
+  });
+
+  await page.route('**/api/cases/pending-image', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [] }) });
+  });
+
+  await page.goto('/patient-data');
+  await page.getByLabel('Child name').fill('Ada');
+  await page.getByLabel('Animal name').fill('Teddy');
+  await page.getByLabel('QR content').fill('qr-123');
+
+  const submitButton = page.getByRole('button', { name: /Save Patient Data|Saving patient data\.\.\./ });
+  await page.locator('form').evaluate((form) => {
+    (form as HTMLFormElement).requestSubmit();
+    (form as HTMLFormElement).requestSubmit();
+  });
+
+  await expect(submitButton).toBeDisabled();
+  await expect.poll(() => createCalls).toBe(1);
+
+  releaseCreate?.();
+  await expect(page).toHaveURL(/\/camera$/);
+});
+
 test('results page supports confirm decision', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
