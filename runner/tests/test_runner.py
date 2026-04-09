@@ -200,6 +200,122 @@ def test_chroma_build_vlm_prompt_instruction_uses_user_hint() -> None:
     assert "Use this as the animal type anchor" in instruction
 
 
+def test_chroma_generate_prompt_with_mistral_uploads_completes_and_deletes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.setattr(chroma_module, "_CHROMA_IMPORT_ERROR", None)
+    captured: dict[str, Any] = {}
+
+    class _FakeFiles:
+        def upload(self, *, file: dict[str, Any], purpose: str) -> Any:
+            captured["upload_file_name"] = file["file_name"]
+            captured["upload_payload_prefix"] = file["content"][:8]
+            captured["upload_content_type"] = type(file["content"])
+            captured["upload_purpose"] = purpose
+            return type("_Upload", (), {"id": "file-123"})()
+
+        def get_signed_url(self, *, file_id: str) -> Any:
+            captured["signed_url_file_id"] = file_id
+            return type("_SignedUrl", (), {"url": "https://mistral.invalid/file-123"})()
+
+        def delete(self, *, file_id: str) -> None:
+            captured.setdefault("deleted_file_ids", []).append(file_id)
+
+    class _FakeChat:
+        def complete(self, **kwargs: Any) -> dict[str, Any]:
+            captured["chat_kwargs"] = kwargs
+            return {"choices": [{"message": {"content": "generated prompt"}}]}
+
+    class _FakeMistral:
+        def __init__(self, *, api_key: str) -> None:
+            captured["api_key"] = api_key
+            self.files = _FakeFiles()
+            self.chat = _FakeChat()
+
+    monkeypatch.setattr(chroma_module, "Mistral", _FakeMistral)
+
+    prompt = chroma_module.generate_prompt_with_mistral(
+        image=Image.new("RGB", (4, 4), color=(10, 20, 30)),
+        instruction="Describe the skeleton",
+        api_key="  test-key  ",
+        model="ministral-14b-latest",
+        temperature=0.3,
+        max_tokens=5000,
+    )
+
+    assert prompt == "generated prompt"
+    assert captured["api_key"] == "test-key"
+    assert captured["upload_file_name"] == "vlm_input.png"
+    assert captured["upload_payload_prefix"].startswith(b"\x89PNG")
+    assert captured["upload_content_type"] is bytes
+    assert captured["upload_purpose"] == chroma_module.VLM_FILE_PURPOSE
+    assert captured["signed_url_file_id"] == "file-123"
+    assert captured["deleted_file_ids"] == ["file-123"]
+    assert captured["chat_kwargs"] == {
+        "model": "ministral-14b-latest",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe the skeleton"},
+                    {
+                        "type": "image_url",
+                        "image_url": "https://mistral.invalid/file-123",
+                    },
+                ],
+            }
+        ],
+        "temperature": 0.3,
+        "max_tokens": 5000,
+    }
+
+
+def test_chroma_generate_prompt_with_mistral_deletes_uploaded_file_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chroma_module = runner_module.chroma
+    monkeypatch.setattr(chroma_module, "_CHROMA_IMPORT_ERROR", None)
+    deleted_file_ids: list[str] = []
+
+    class _FakeFiles:
+        def upload(self, *, file: dict[str, Any], purpose: str) -> Any:
+            del file, purpose
+            return type("_Upload", (), {"id": "file-123"})()
+
+        def get_signed_url(self, *, file_id: str) -> Any:
+            return type(
+                "_SignedUrl", (), {"url": f"https://mistral.invalid/{file_id}"}
+            )()
+
+        def delete(self, *, file_id: str) -> None:
+            deleted_file_ids.append(file_id)
+
+    class _FakeChat:
+        def complete(self, **_kwargs: Any) -> Any:
+            raise RuntimeError("chat failed")
+
+    class _FakeMistral:
+        def __init__(self, *, api_key: str) -> None:
+            del api_key
+            self.files = _FakeFiles()
+            self.chat = _FakeChat()
+
+    monkeypatch.setattr(chroma_module, "Mistral", _FakeMistral)
+
+    with pytest.raises(RuntimeError, match="requesting chat completion"):
+        chroma_module.generate_prompt_with_mistral(
+            image=Image.new("RGB", (4, 4), color=(10, 20, 30)),
+            instruction="Describe the skeleton",
+            api_key="test-key",
+            model="ministral-14b-latest",
+            temperature=0.3,
+            max_tokens=5000,
+        )
+
+    assert deleted_file_ids == ["file-123"]
+
+
 def test_chroma_first_pass_uses_watchdog_output_when_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -258,10 +374,7 @@ def test_chroma_setup_initializes_only_single_rembg_session(
 ) -> None:
     chroma_module = runner_module.chroma
     workflow = chroma_module.ChromaWorkflow()
-    workflow.configure(
-        vlm_server="http://vlm.local:8001",
-        vlm_model_name="gpt-4.1-mini",
-    )
+    workflow.configure(mistral_api_key="test-key")
 
     session_models: list[str] = []
     fake_sdxl_pipe = object()
@@ -303,8 +416,7 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
 ) -> None:
     chroma_module = runner_module.chroma
     workflow = chroma_module.ChromaWorkflow()
-    workflow.vlm_server = "http://vlm.local:8001"
-    workflow.vlm_model_name = "gpt-4.1-mini"
+    workflow.mistral_api_key = "test-key"
     workflow._torch = object()
     workflow._device = "cpu"
     workflow._first_pass_session = object()
@@ -372,7 +484,7 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
     )
     monkeypatch.setattr(
         chroma_module,
-        "generate_prompt_with_openai_compatible",
+        "generate_prompt_with_mistral",
         lambda **_kwargs: "generated prompt",
     )
     monkeypatch.setattr(
@@ -1183,7 +1295,7 @@ def test_run_runner_stops_after_backend_marks_job_stale(monkeypatch) -> None:
     assert FakeBackendClient.instances[0].submissions == [(13, 4)]
 
 
-def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:
+def test_run_runner_passes_mistral_configuration_into_workflow(monkeypatch) -> None:
     class FakeWorkflow:
         name = "dummy"
 
@@ -1228,19 +1340,38 @@ def test_run_runner_passes_vlm_configuration_into_workflow(monkeypatch) -> None:
             workflow_name="dummy",
             server="http://backend:8000",
             password="pw",
-            vlm_server="http://vlm.local:8001",
-            vlm_server_key="test-key",
-            vlm_model_name="gpt-4.1-mini",
+            mistral_api_key="test-key",
         )
 
     assert workflow.setup_called is True
-    assert workflow.configure_calls == [
-        {
-            "vlm_server": "http://vlm.local:8001",
-            "vlm_server_key": "test-key",
-            "vlm_model_name": "gpt-4.1-mini",
-        }
-    ]
+    assert workflow.configure_calls == [{"mistral_api_key": "test-key"}]
+
+
+def test_cli_passes_mistral_api_key_into_run_runner(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_runner(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(runner_module, "run_runner", fake_run_runner)
+    cli_runner = CliRunner()
+
+    result = cli_runner.invoke(
+        runner_module.cli,
+        [
+            "--workflow",
+            "dummy",
+            "--server",
+            "http://backend:8000",
+            "--password",
+            "pw",
+            "--mistral-api-key",
+            "test-key",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["mistral_api_key"] == "test-key"
 
 
 def test_cli_passes_no_watermark_into_run_runner(monkeypatch) -> None:

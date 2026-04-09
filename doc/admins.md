@@ -8,13 +8,9 @@ Currently these are the requirements for running the application.
 	* 8 GB RAM should be enough
 	* Needs to be accessible from both the network where the hospital is operating and from the GPU runner
 * Access to a persistently available, supported Storage backend. This is currently limited to a Seafile instance (in Heidelberg: [HeiBox](https://heibox.uni-heidelberg.de))
-* An NVidia GPU with 80GB VRAM on some machine - not directly on above VM!
+* An NVidia GPU with ~40GB VRAM on some machine - not directly on above VM!
 
-If you do not have 80GB of VRAM, there is possibilities to split this up onto multiple GPUs or trim down, but they might require work on the code or might affect generation results:
-* You can switch to a cheaper/quantized VLM
-* You can use a cloud-hosted VLM, any OpenAI-compatible API works. This will also be much more cost effective - we did not do it, because we ran into problems with rate limiting on the mistral.ai free tier.
-* You can distribute VLM and generation to different devices
-* You could do Chroma-based X-Ray Style Adaptation (removing the necessity to load two different image generation models)
+If you do not have 40GB of VRAM, there is possibilities to trim this down, but they might require work on the code or might affect generation results. Please get in touch if you need this.
 
 ## Virtual machine Setup
 
@@ -46,9 +42,9 @@ sudo systemctl status teddy-app.service
 
 ## GPU Runner Setup
 
-There is three separate services that need to be setup:
-* The image generator service from our code: It regularly polls the backend for jobs and submits the results back to it
-* A VLM inference server e.g. via `vllm`
+There are two things that need to be available on the runner side:
+* The image generator service from our code. It regularly polls the backend for jobs and submits the results back to it.
+* Outbound network access to the MistralAI API plus a valid API key for the VLM prompt-generation step.
 
 ### Image generator service
 
@@ -82,21 +78,33 @@ Options:
   --debug                    Enable workflow debug mode (writes intermediate
                              artifacts when supported).
   --no-watermark             Skip watermark generation and overlay.
-  --vlm-server TEXT          VLM base URL.
-  --vlm-server-key TEXT      VLM API key.
-  --vlm-model-name TEXT      VLM model name.
+  --mistral-api-key TEXT     Mistral API key used for VLM prompt generation.
   --help                     Show this message and exit.
 ```
 
-### VLM Inference Server
-
-The VLM inference server is used to analyse the input image and write a prompt that describes the desired anatomic output in detail. While in theory, any vision-language model is capable of doing this, we observed quite some differences about how the VLMs are able to reason about anatomy. This is mostly likely related to the differences in their training data. In our experience, [mistralai/Ministral-3-14B-Instruct-2512](https://huggingface.co/mistralai/Ministral-3-14B-Instruct-2512) works very well.
-
-Here is an example deployment on an A100-80GB using [vllm](https://vllm.ai/):
+Example invocation for the Chroma workflow:
 
 ```bash
-vllm serve mistralai/Ministral-3-14B-Instruct-2512 --port 9080  --max-model-len 3000 --gpu-memory-utilization 0.5 --limit-mm-per-prompt.video 0 --mm-encoder-tp-mode data --mm-processor-cache-gb 0 --tokenizer_mode mistral --config_format mistral --load_format mistral --enable-auto-tool-choice --tool-call-parser mistral
+tbk-runner \
+  --workflow chroma \
+  --server http://backend:8000 \
+  --password YOUR_SHARED_PASSWORD \
+  --mistral-api-key YOUR_MISTRAL_API_KEY
 ```
+
+### MistralAI VLM Access
+
+Due to the the high VRAM demands, we have decided to move away from on-premise VLMs, but
+use the MistralAI API instead. The choice of MistralAI was made because its models showed very
+good capabilities to reason about anatomy (e.g. compared to chinese models). The used model
+currently (April 2026) costs 0.17EUR/1M tokens which is enough for >500 input images.
+
+The MistralAI setup as of April 2026 is:
+* Subscribe to the "Scaling Plan" for Mistral AI Studio. No subscription cost, but credit card details required.
+* Create an API key at https://admin.mistral.ai/organization/api-keys
+* Supply this API key via `--mistral-api-key`.
+
+Because of this flow, the GPU runner host needs outbound HTTPS access to the MistralAI API endpoints.
 
 ## Storage Configuration
 

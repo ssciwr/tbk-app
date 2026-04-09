@@ -527,17 +527,13 @@ def run_runner(
     password: str,
     debug: bool = False,
     no_watermark: bool = False,
-    vlm_server: str | None = None,
-    vlm_server_key: str | None = None,
-    vlm_model_name: str | None = None,
+    mistral_api_key: str | None = None,
 ) -> None:
     workflow = create_workflow(workflow_name)
     configure = getattr(workflow, "configure", None)
     if callable(configure):
         configure(
-            vlm_server=vlm_server,
-            vlm_server_key=vlm_server_key,
-            vlm_model_name=vlm_model_name,
+            mistral_api_key=mistral_api_key,
         )
 
     if not workflow.is_available():
@@ -720,16 +716,8 @@ def run_runner(
     help="Skip watermark generation and overlay.",
 )
 @click.option(
-    "--vlm-server",
-    help="VLM base URL.",
-)
-@click.option(
-    "--vlm-server-key",
-    help="VLM API key.",
-)
-@click.option(
-    "--vlm-model-name",
-    help="VLM model name.",
+    "--mistral-api-key",
+    help="Mistral API key used for VLM prompt generation.",
 )
 def cli(
     workflow: str,
@@ -737,9 +725,7 @@ def cli(
     password: str,
     debug: bool,
     no_watermark: bool,
-    vlm_server: str | None,
-    vlm_server_key: str | None,
-    vlm_model_name: str | None,
+    mistral_api_key: str | None,
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -751,9 +737,7 @@ def cli(
         password=password,
         debug=debug,
         no_watermark=no_watermark,
-        vlm_server=vlm_server,
-        vlm_server_key=vlm_server_key,
-        vlm_model_name=vlm_model_name,
+        mistral_api_key=mistral_api_key,
     )
 
 
