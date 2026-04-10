@@ -2,6 +2,9 @@ import { expect, test } from '@playwright/test';
 
 const TINY_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMBAAImfukAAAAASUVORK5CYII=';
+const LARGE_EDITOR_IMAGE = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="420" viewBox="0 0 420 420"><rect width="420" height="420" fill="#eef2f4"/><ellipse cx="210" cy="210" rx="150" ry="165" fill="#d8dde1"/><circle cx="170" cy="175" r="12" fill="#707983"/><circle cx="250" cy="175" r="12" fill="#707983"/><path d="M170 255c26 24 54 36 85 36s59-12 85-36" stroke="#707983" stroke-width="16" stroke-linecap="round" fill="none"/></svg>'
+)}`;
 
 test('login flow stores token and redirects to patient data stage', async ({ page }) => {
   await page.route('**/api/auth/token', async (route) => {
@@ -158,6 +161,80 @@ test('results page supports confirm decision', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Accept' }).first().click();
   await expect(page).toHaveURL(/\/fracture$/);
+});
+
+test('fracture page supports gummy pack placement, apply, and discard', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  await page.route('**/api/config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ fracture_editor_enabled: true })
+    });
+  });
+
+  await page.route('**/api/fracture/pending', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        cases: [
+          {
+            case_id: 12,
+            metadata: {
+              child_name: 'Ada',
+              animal_name: 'Teddy',
+              animal_type: 'bear'
+            },
+            selected_url: LARGE_EDITOR_IMAGE
+          }
+        ]
+      })
+    });
+  });
+
+  await page.goto('/fracture');
+  await expect(page.getByText('Case #12')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Add gummy bear package' }).click();
+  await expect(page.getByRole('button', { name: 'Discard gummy placement' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Apply gummy placement' })).toBeVisible();
+  await expect(page.getByLabel('Gummy pack opacity')).toBeVisible();
+
+  const pack = page.locator('.gummy-pack');
+  await expect(pack).toBeVisible();
+  const packBox = await pack.boundingBox();
+  if (!packBox) {
+    throw new Error('Expected gummy pack overlay to be visible');
+  }
+
+  await page.mouse.move(packBox.x + packBox.width / 2, packBox.y + packBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(packBox.x + packBox.width / 2 + 40, packBox.y + packBox.height / 2 + 20);
+  await page.mouse.up();
+
+  await page.getByLabel('Gummy pack opacity').evaluate((element) => {
+    const input = element as HTMLInputElement;
+    input.value = '0.7';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+
+  await page.getByRole('button', { name: 'Apply gummy placement' }).click();
+  await expect(page.getByText('Case #12: gummy pack added.')).toBeVisible();
+  await expect(page.getByLabel('Gummy pack opacity')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Add gummy bear package' }).click();
+  await expect(page.getByLabel('Gummy pack opacity')).toBeVisible();
+  await page.getByRole('button', { name: 'Discard gummy placement' }).click();
+  await expect(page.getByText('Discarded gummy pack.')).toBeVisible();
+  await expect(page.getByLabel('Gummy pack opacity')).toHaveCount(0);
 });
 
 test('review page sends edited animal hint with retry', async ({ page }) => {
