@@ -5,10 +5,23 @@ from pathlib import Path
 
 import pytest
 
+from app.storage.providers import local
 from app.storage.providers.local import LocalFilesystemProvider
+from app.storage.providers.parents_assets import ParentAsset
 
 
-def test_local_storage_provider_writes_and_path_safety(tmp_path: Path) -> None:
+def test_local_storage_provider_writes_and_path_safety(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        local,
+        "parents_asset_files",
+        lambda: (
+            ParentAsset("PARENTS.md", b"Liebe Eltern,\n"),
+            ParentAsset("consent.txt", b"consent details"),
+        ),
+    )
+
     provider = LocalFilesystemProvider(tmp_path)
     label = provider.qr_pdf_backend_label()
     assert label.startswith("local (")
@@ -21,8 +34,11 @@ def test_local_storage_provider_writes_and_path_safety(tmp_path: Path) -> None:
 
     case_dir = tmp_path / "1"
     assert (
-        (case_dir / "README.md").read_text(encoding="utf-8").startswith("Liebe Eltern,")
+        (case_dir / "PARENTS.md")
+        .read_text(encoding="utf-8")
+        .startswith("Liebe Eltern,")
     )
+    assert (case_dir / "consent.txt").read_bytes() == b"consent details"
     assert (case_dir / "orig.png").read_bytes() == b"original"
     assert (case_dir / "xray.png").read_bytes() == b"xray"
     assert (case_dir / "combo.png").read_bytes() == b"combo"

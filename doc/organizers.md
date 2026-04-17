@@ -18,5 +18,5 @@ If you are an organizer of an instance of the Teddy Bear Hospital and you also w
 	* enables robust lighting conditions
 	* You can have multiple cushions inside that help you place animals properly
 * Print QR Codes by switching to "QR-Code generation" in the application footer
-* Customize the [message](https://github.com/ssciwr/tbk-app/blob/main/assets/PARENTS.md) that will be stored for all parents in the cloud storage
+* Customize the files in [`assets/parents`](https://github.com/ssciwr/tbk-app/tree/main/assets/parents) that will be stored for all parents in the cloud storage
 * Make sure that all your "doctors" are familiar with the UI e.g. by reading the [documentation for doctors](doctors.md)

@@ -2,10 +2,20 @@ from __future__ import annotations
 
 from io import BytesIO
 
+from app.storage.providers import seafile
+from app.storage.providers.parents_assets import ParentAsset
 from app.storage.providers.seafile import SeafileProvider
 
 
 def test_seafile_provider_is_mockable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        seafile,
+        "parents_asset_files",
+        lambda: (
+            ParentAsset("PARENTS.md", b"Liebe Eltern,\n"),
+            ParentAsset("consent.txt", b"consent details"),
+        ),
+    )
     monkeypatch.setattr(SeafileProvider, "_get_server_version", lambda self: "12.0")
     monkeypatch.setattr(SeafileProvider, "_ensure_library", lambda self: "repo-1")
     monkeypatch.setattr(SeafileProvider, "_discover_next_case_id", lambda self: 1)
@@ -54,7 +64,7 @@ def test_seafile_provider_is_mockable(monkeypatch) -> None:
     ref = provider.create_storage_for_user()
     assert ref.startswith("https://seafile.local/s/")
     assert "/1" in created_dirs
-    assert upload_calls == [("/1", "README.md")]
+    assert upload_calls == [("/1", "PARENTS.md"), ("/1", "consent.txt")]
 
     provider.upload_file(1, "normal", BytesIO(b"a"), "original.png")
     assert upload_calls[-1] == ("/1", "original.png")
