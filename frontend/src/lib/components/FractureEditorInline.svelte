@@ -20,6 +20,7 @@
 
   type GummyHandle = 'tl' | 'tr' | 'br' | 'bl';
   type GummyDragMode = 'move' | 'rotate' | `resize-${GummyHandle}` | null;
+  type EditorTool = 'brush' | 'eraser' | 'zoom';
   type GummyPlacement = {
     centerX: number;
     centerY: number;
@@ -27,6 +28,18 @@
     height: number;
     rotation: number;
     opacity: number;
+  };
+  type ZoomRegion = {
+    x: number;
+    y: number;
+    size: number;
+  };
+  type ZoomView = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scale: number;
   };
 
   const MASK_ALPHA_THRESHOLD = 32;
@@ -41,6 +54,7 @@
   const GUMMY_ASSET_URL = '/haribo.png';
   const GUMMY_DEFAULT_OPACITY = 0.5;
   const GUMMY_MIN_WIDTH = 52;
+  const ZOOM_SELECTION_MIN_SIZE = 24;
 
   let currentImageUrl: string | null = null;
   let baseImageUrl: string | null = null;
@@ -51,13 +65,22 @@
   let previewBusy = false;
   let submitting = false;
 
-  let tool: 'brush' | 'eraser' = 'brush';
+  let tool: EditorTool = 'brush';
   let brushSize = 14;
   let sizeSliderOpen = false;
+  let baseFrameWidth = 0;
+  let baseFrameHeight = 0;
+  let zoomRegion: ZoomRegion | null = null;
+  let zoomSelection: ZoomRegion | null = null;
+  let zoomSelecting = false;
+  let zoomStartX = 0;
+  let zoomStartY = 0;
 
   let imageEl: HTMLImageElement | null = null;
   let canvasEl: HTMLCanvasElement | null = null;
   let canvasCtx: CanvasRenderingContext2D | null = null;
+  let fullOverlayCanvas: HTMLCanvasElement | null = null;
+  let fullOverlayCtx: CanvasRenderingContext2D | null = null;
   let drawing = false;
   let lastX = 0;
   let lastY = 0;
@@ -87,10 +110,27 @@
     tool = 'brush';
     brushSize = 14;
     sizeSliderOpen = false;
+    baseFrameWidth = 0;
+    baseFrameHeight = 0;
+    resetZoomState();
+    fullOverlayCanvas = null;
+    fullOverlayCtx = null;
     revokePreviewUrl();
     resetGummyEditState();
     clearOverlayDirect();
   }
+
+  $: frameStyle =
+    baseFrameWidth > 0 && baseFrameHeight > 0
+      ? `width:${Math.round(baseFrameWidth)}px;height:${Math.round(baseFrameHeight)}px;`
+      : '';
+
+  $: imageStyle =
+    baseFrameWidth > 0 && baseFrameHeight > 0
+      ? zoomRegion
+        ? zoomedImageStyle(zoomRegion)
+        : 'left:0px;top:0px;width:100%;height:100%;'
+      : '';
 
   function revokePreviewUrl(): void {
     if (previewUrl) {
@@ -114,26 +154,174 @@
     gummyOverlaySnapshot = null;
   }
 
-  function clearOverlayDirect(): void {
+  function resetZoomState(): void {
+    zoomRegion = null;
+    zoomSelection = null;
+    zoomSelecting = false;
+    zoomStartX = 0;
+    zoomStartY = 0;
+  }
+
+  function ensureFullOverlay(width: number, height: number): void {
+    if (
+      fullOverlayCanvas &&
+      fullOverlayCtx &&
+      fullOverlayCanvas.width === width &&
+      fullOverlayCanvas.height === height
+    ) {
+      return;
+    }
+
+    const previousCanvas = fullOverlayCanvas;
+    const nextCanvas = document.createElement('canvas');
+    nextCanvas.width = width;
+    nextCanvas.height = height;
+    const nextCtx = nextCanvas.getContext('2d');
+    if (!nextCtx) {
+      fullOverlayCanvas = null;
+      fullOverlayCtx = null;
+      return;
+    }
+
+    if (previousCanvas && previousCanvas.width > 0 && previousCanvas.height > 0) {
+      nextCtx.drawImage(previousCanvas, 0, 0, width, height);
+    }
+
+    fullOverlayCanvas = nextCanvas;
+    fullOverlayCtx = nextCtx;
+  }
+
+  function currentZoomView(region: ZoomRegion | null = zoomRegion): ZoomView {
+    const frameWidth = Math.max(1, baseFrameWidth || canvasEl?.width || 1);
+    const frameHeight = Math.max(1, baseFrameHeight || canvasEl?.height || 1);
+
+    if (!region) {
+      return {
+        x: 0,
+        y: 0,
+        width: frameWidth,
+        height: frameHeight,
+        scale: 1
+      };
+    }
+
+    const scale = Math.max(1, Math.min(frameWidth, frameHeight) / Math.max(1, region.size));
+    const viewWidth = frameWidth / scale;
+    const viewHeight = frameHeight / scale;
+    const centerX = region.x + region.size / 2;
+    const centerY = region.y + region.size / 2;
+    const x = clamp(centerX - viewWidth / 2, 0, Math.max(0, frameWidth - viewWidth));
+    const y = clamp(centerY - viewHeight / 2, 0, Math.max(0, frameHeight - viewHeight));
+
+    return {
+      x,
+      y,
+      width: viewWidth,
+      height: viewHeight,
+      scale
+    };
+  }
+
+  function zoomedImageStyle(region: ZoomRegion): string {
+    const view = currentZoomView(region);
+    return `left:${-view.x * view.scale}px;top:${-view.y * view.scale}px;width:${
+      Math.max(1, baseFrameWidth) * view.scale
+    }px;height:${Math.max(1, baseFrameHeight) * view.scale}px;`;
+  }
+
+  function fullPointToView(point: { x: number; y: number }): { x: number; y: number } {
+    const view = currentZoomView();
+    return {
+      x: (point.x - view.x) * view.scale,
+      y: (point.y - view.y) * view.scale
+    };
+  }
+
+  function viewPointToFull(point: { x: number; y: number }): { x: number; y: number } {
+    const view = currentZoomView();
+    return {
+      x: clamp(view.x + point.x / view.scale, 0, Math.max(1, baseFrameWidth || canvasEl?.width || 1)),
+      y: clamp(view.y + point.y / view.scale, 0, Math.max(1, baseFrameHeight || canvasEl?.height || 1))
+    };
+  }
+
+  function drawZoomSelection(): void {
+    if (!canvasCtx || !zoomSelection) {
+      return;
+    }
+
+    const topLeft = fullPointToView({ x: zoomSelection.x, y: zoomSelection.y });
+    const bottomRight = fullPointToView({
+      x: zoomSelection.x + zoomSelection.size,
+      y: zoomSelection.y + zoomSelection.size
+    });
+    const x = Math.min(topLeft.x, bottomRight.x);
+    const y = Math.min(topLeft.y, bottomRight.y);
+    const size = Math.max(Math.abs(bottomRight.x - topLeft.x), Math.abs(bottomRight.y - topLeft.y));
+
+    canvasCtx.save();
+    canvasCtx.strokeStyle = '#0e7c7b';
+    canvasCtx.fillStyle = 'rgba(14, 124, 123, 0.12)';
+    canvasCtx.lineWidth = 2;
+    canvasCtx.setLineDash([7, 5]);
+    canvasCtx.fillRect(x, y, size, size);
+    canvasCtx.strokeRect(x, y, size, size);
+    canvasCtx.restore();
+  }
+
+  function renderVisibleOverlay(): void {
     if (!canvasEl || !canvasCtx) {
       return;
     }
+
     canvasCtx.save();
     canvasCtx.globalCompositeOperation = 'source-over';
     canvasCtx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+    if (fullOverlayCanvas) {
+      const view = currentZoomView();
+      canvasCtx.drawImage(
+        fullOverlayCanvas,
+        view.x,
+        view.y,
+        view.width,
+        view.height,
+        0,
+        0,
+        canvasEl.width,
+        canvasEl.height
+      );
+    }
     canvasCtx.restore();
+
+    drawZoomSelection();
+  }
+
+  function clearOverlayDirect(): void {
+    if (fullOverlayCanvas && fullOverlayCtx) {
+      fullOverlayCtx.save();
+      fullOverlayCtx.globalCompositeOperation = 'source-over';
+      fullOverlayCtx.clearRect(0, 0, fullOverlayCanvas.width, fullOverlayCanvas.height);
+      fullOverlayCtx.restore();
+    }
+    renderVisibleOverlay();
   }
 
   function syncCanvasToImage(): void {
     if (!imageEl || !canvasEl) {
       return;
     }
-    const width = Math.max(1, Math.round(imageEl.clientWidth));
-    const height = Math.max(1, Math.round(imageEl.clientHeight));
+    const imageRect = imageEl.getBoundingClientRect();
+    const width = Math.max(1, Math.round(baseFrameWidth || imageRect.width));
+    const height = Math.max(1, Math.round(baseFrameHeight || imageRect.height));
+    if (baseFrameWidth <= 0 || baseFrameHeight <= 0) {
+      baseFrameWidth = width;
+      baseFrameHeight = height;
+    }
     canvasEl.width = width;
     canvasEl.height = height;
     canvasCtx = canvasEl.getContext('2d');
-    clearOverlayDirect();
+    ensureFullOverlay(width, height);
+    renderVisibleOverlay();
   }
 
   function canvasPoint(event: PointerEvent): { x: number; y: number } {
@@ -141,8 +329,10 @@
       return { x: 0, y: 0 };
     }
     const rect = canvasEl.getBoundingClientRect();
-    const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
-    const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+    const scaleX = canvasEl.width / Math.max(1, rect.width);
+    const scaleY = canvasEl.height / Math.max(1, rect.height);
+    const x = clamp((event.clientX - rect.left) * scaleX, 0, canvasEl.width);
+    const y = clamp((event.clientY - rect.top) * scaleY, 0, canvasEl.height);
     return { x, y };
   }
 
@@ -161,6 +351,32 @@
 
   function clampOpacity(value: number): number {
     return clamp(value, 0.05, 1);
+  }
+
+  function selectZoomTool(): void {
+    if (busy || previewBusy || submitting || gummyPlacement) {
+      return;
+    }
+    tool = 'zoom';
+    sizeSliderOpen = false;
+    zoomSelection = null;
+    message = 'Draw a square over the area to zoom into.';
+    renderVisibleOverlay();
+  }
+
+  function zoomOut(): void {
+    if (busy || previewBusy || submitting || gummyPlacement) {
+      return;
+    }
+    const hadZoomState = zoomRegion !== null || zoomSelection !== null || zoomSelecting || tool === 'zoom';
+    resetZoomState();
+    tool = 'brush';
+    sizeSliderOpen = false;
+    drawing = false;
+    renderVisibleOverlay();
+    if (hadZoomState) {
+      message = 'Showing full image.';
+    }
   }
 
   function rotateVector(x: number, y: number, angle: number): { x: number; y: number } {
@@ -250,21 +466,22 @@
   }
 
   function captureOverlaySnapshot(): ImageData | null {
-    if (!canvasEl || !canvasCtx) {
+    if (!fullOverlayCanvas || !fullOverlayCtx) {
       return null;
     }
-    return canvasCtx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+    return fullOverlayCtx.getImageData(0, 0, fullOverlayCanvas.width, fullOverlayCanvas.height);
   }
 
   function restoreOverlaySnapshot(snapshot: ImageData | null): void {
     clearOverlayDirect();
-    if (!snapshot || !canvasEl || !canvasCtx) {
+    if (!snapshot || !fullOverlayCanvas || !fullOverlayCtx) {
       return;
     }
-    if (snapshot.width !== canvasEl.width || snapshot.height !== canvasEl.height) {
+    if (snapshot.width !== fullOverlayCanvas.width || snapshot.height !== fullOverlayCanvas.height) {
       return;
     }
-    canvasCtx.putImageData(snapshot, 0, 0);
+    fullOverlayCtx.putImageData(snapshot, 0, 0);
+    renderVisibleOverlay();
   }
 
   function setGummyPointerCapture(pointerId: number): void {
@@ -313,21 +530,41 @@
     return gummyPackImagePromise;
   }
 
+  function zoomSelectionFromPoints(
+    start: { x: number; y: number },
+    end: { x: number; y: number }
+  ): ZoomRegion {
+    const maxSize = Math.max(1, Math.min(baseFrameWidth || canvasEl?.width || 1, baseFrameHeight || canvasEl?.height || 1));
+    const rawSize = Math.min(maxSize, Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y)));
+    const directionX = end.x >= start.x ? 1 : -1;
+    const directionY = end.y >= start.y ? 1 : -1;
+    const x = directionX > 0 ? start.x : start.x - rawSize;
+    const y = directionY > 0 ? start.y : start.y - rawSize;
+
+    return {
+      x: clamp(x, 0, Math.max(0, (baseFrameWidth || canvasEl?.width || 1) - rawSize)),
+      y: clamp(y, 0, Math.max(0, (baseFrameHeight || canvasEl?.height || 1) - rawSize)),
+      size: rawSize
+    };
+  }
+
   function drawStroke(fromX: number, fromY: number, toX: number, toY: number): void {
-    if (!canvasCtx) {
+    if (!fullOverlayCtx) {
       return;
     }
-    canvasCtx.save();
-    canvasCtx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
-    canvasCtx.lineCap = 'round';
-    canvasCtx.lineJoin = 'round';
-    canvasCtx.strokeStyle = '#f2485a';
-    canvasCtx.lineWidth = Math.max(1, brushSize);
-    canvasCtx.beginPath();
-    canvasCtx.moveTo(fromX, fromY);
-    canvasCtx.lineTo(toX, toY);
-    canvasCtx.stroke();
-    canvasCtx.restore();
+    const view = currentZoomView();
+    fullOverlayCtx.save();
+    fullOverlayCtx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+    fullOverlayCtx.lineCap = 'round';
+    fullOverlayCtx.lineJoin = 'round';
+    fullOverlayCtx.strokeStyle = '#f2485a';
+    fullOverlayCtx.lineWidth = Math.max(0.25, brushSize / view.scale);
+    fullOverlayCtx.beginPath();
+    fullOverlayCtx.moveTo(fromX, fromY);
+    fullOverlayCtx.lineTo(toX, toY);
+    fullOverlayCtx.stroke();
+    fullOverlayCtx.restore();
+    renderVisibleOverlay();
   }
 
   function startDrawing(event: PointerEvent): void {
@@ -349,9 +586,20 @@
       // Not all browsers support pointer capture.
     }
     const point = canvasPoint(event);
-    lastX = point.x;
-    lastY = point.y;
-    drawStroke(point.x, point.y, point.x, point.y);
+    const fullPoint = viewPointToFull(point);
+
+    if (tool === 'zoom') {
+      zoomSelecting = true;
+      zoomStartX = fullPoint.x;
+      zoomStartY = fullPoint.y;
+      zoomSelection = { x: fullPoint.x, y: fullPoint.y, size: 0 };
+      renderVisibleOverlay();
+      return;
+    }
+
+    lastX = fullPoint.x;
+    lastY = fullPoint.y;
+    drawStroke(fullPoint.x, fullPoint.y, fullPoint.x, fullPoint.y);
   }
 
   function continueDrawing(event: PointerEvent): void {
@@ -359,15 +607,37 @@
       return;
     }
     const point = canvasPoint(event);
-    drawStroke(lastX, lastY, point.x, point.y);
-    lastX = point.x;
-    lastY = point.y;
+    const fullPoint = viewPointToFull(point);
+
+    if (tool === 'zoom') {
+      zoomSelection = zoomSelectionFromPoints({ x: zoomStartX, y: zoomStartY }, fullPoint);
+      renderVisibleOverlay();
+      return;
+    }
+
+    drawStroke(lastX, lastY, fullPoint.x, fullPoint.y);
+    lastX = fullPoint.x;
+    lastY = fullPoint.y;
   }
 
   function stopDrawing(event: PointerEvent): void {
     if (!canvasEl) {
       drawing = false;
       return;
+    }
+    if (tool === 'zoom' && zoomSelecting) {
+      if (zoomSelection && zoomSelection.size >= ZOOM_SELECTION_MIN_SIZE) {
+        zoomRegion = zoomSelection;
+        zoomSelection = null;
+        zoomSelecting = false;
+        tool = 'brush';
+        message = 'Zoomed into selected area.';
+      } else {
+        zoomSelection = null;
+        zoomSelecting = false;
+        message = 'Draw a larger square to zoom in.';
+      }
+      renderVisibleOverlay();
     }
     drawing = false;
     try {
@@ -786,10 +1056,10 @@
   }
 
   function overlayHasContent(): boolean {
-    if (!canvasEl || !canvasCtx) {
+    if (!fullOverlayCanvas || !fullOverlayCtx) {
       return false;
     }
-    const pixelData = canvasCtx.getImageData(0, 0, canvasEl.width, canvasEl.height).data;
+    const pixelData = fullOverlayCtx.getImageData(0, 0, fullOverlayCanvas.width, fullOverlayCanvas.height).data;
     for (let index = 3; index < pixelData.length; index += 4) {
       if (pixelData[index] > 0) {
         return true;
@@ -803,6 +1073,7 @@
     revokePreviewUrl();
     previewUrl = nextPreviewUrl;
     currentImageUrl = nextPreviewUrl;
+    resetZoomState();
     clearOverlayDirect();
   }
 
@@ -813,6 +1084,7 @@
     revokePreviewUrl();
     currentImageUrl = baseImageUrl;
     sizeSliderOpen = false;
+    resetZoomState();
     resetGummyEditState();
     clearOverlayDirect();
     message = 'Reset to selected image.';
@@ -826,6 +1098,9 @@
     previewBusy = true;
     message = '';
     try {
+      resetZoomState();
+      tool = 'brush';
+      renderVisibleOverlay();
       const packImage = await ensureGummyPackImage();
       const frameWidth = Math.max(1, canvasEl.width || Math.round(imageEl.clientWidth));
       const frameHeight = Math.max(1, canvasEl.height || Math.round(imageEl.clientHeight));
@@ -1005,8 +1280,8 @@
       const packImage = await ensureGummyPackImage();
       const naturalWidth = Math.max(1, imageEl.naturalWidth || canvasEl.width);
       const naturalHeight = Math.max(1, imageEl.naturalHeight || canvasEl.height);
-      const displayWidth = Math.max(1, imageEl.clientWidth || canvasEl.width);
-      const displayHeight = Math.max(1, imageEl.clientHeight || canvasEl.height);
+      const displayWidth = Math.max(1, canvasEl.width);
+      const displayHeight = Math.max(1, canvasEl.height);
       const scaleX = naturalWidth / displayWidth;
       const scaleY = naturalHeight / displayHeight;
 
@@ -1084,7 +1359,7 @@
         message = 'Failed to create mask canvas.';
         return;
       }
-      overlayCtx.drawImage(canvasEl, 0, 0, naturalWidth, naturalHeight);
+      overlayCtx.drawImage(fullOverlayCanvas ?? canvasEl, 0, 0, naturalWidth, naturalHeight);
       const overlayPixels = overlayCtx.getImageData(0, 0, naturalWidth, naturalHeight).data;
 
       const processed = breakBoneInMaskedArea(sourcePixels, overlayPixels);
@@ -1119,8 +1394,11 @@
     if (busy || previewBusy || submitting || gummyPlacement) {
       return;
     }
+    zoomSelection = null;
+    zoomSelecting = false;
     tool = nextTool;
     sizeSliderOpen = true;
+    renderVisibleOverlay();
   }
 
   function cancelEdits(): void {
@@ -1166,225 +1444,270 @@
 
   <div class="editor-stage">
     {#if currentImageUrl}
-      <div class="editor-frame">
-        <img
-          bind:this={imageEl}
-          class="editor-image"
-          src={currentImageUrl}
-          alt="Fracture editor preview"
-          on:load={syncCanvasToImage}
-        />
-        <canvas
-          bind:this={canvasEl}
-          class="editor-canvas"
-          class:is-disabled={gummyPlacement !== null}
-          on:pointerdown={startDrawing}
-          on:pointermove={continueDrawing}
-          on:pointerup={stopDrawing}
-          on:pointerleave={stopDrawing}
-          on:pointercancel={stopDrawing}
-        ></canvas>
+      <div class="editor-viewport-shell">
+        <div class="editor-viewport">
+          <div class="editor-frame" style={frameStyle}>
+            <img
+              bind:this={imageEl}
+              class="editor-image"
+              class:is-sized={frameStyle !== ''}
+              style={imageStyle}
+              src={currentImageUrl}
+              alt="Fracture editor preview"
+              on:load={() => syncCanvasToImage()}
+            />
+            <canvas
+              bind:this={canvasEl}
+              class="editor-canvas"
+              class:is-disabled={gummyPlacement !== null}
+              class:is-zoom-tool={tool === 'zoom'}
+              on:pointerdown={startDrawing}
+              on:pointermove={continueDrawing}
+              on:pointerup={stopDrawing}
+              on:pointerleave={stopDrawing}
+              on:pointercancel={stopDrawing}
+            ></canvas>
 
-        {#if gummyPlacement}
-          {@const placement = gummyPlacement}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            bind:this={gummyOverlayEl}
-            class="gummy-overlay"
-            on:pointermove={continueGummyInteraction}
-            on:pointerup={stopGummyInteraction}
-            on:pointercancel={stopGummyInteraction}
-          >
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-              class="gummy-pack"
-              style={`left:${placement.centerX}px;top:${placement.centerY}px;width:${placement.width}px;height:${placement.height}px;transform:translate(-50%, -50%) rotate(${placement.rotation}rad);`}
-              on:pointerdown|stopPropagation={beginGummyMove}
-            >
-              <img
-                class="gummy-pack-image"
-                src={GUMMY_ASSET_URL}
-                alt=""
-                aria-hidden="true"
-                draggable="false"
-                style={`opacity:${placement.opacity};`}
-              />
-              <div class="gummy-pack-outline"></div>
-              <button
-                type="button"
-                class="gummy-handle tl"
-                aria-label="Resize gummy pack from top left"
-                on:pointerdown|stopPropagation={(event) => beginGummyResize('tl', event)}
-              ></button>
-              <button
-                type="button"
-                class="gummy-handle tr"
-                aria-label="Resize gummy pack from top right"
-                on:pointerdown|stopPropagation={(event) => beginGummyResize('tr', event)}
-              ></button>
-              <button
-                type="button"
-                class="gummy-handle br"
-                aria-label="Resize gummy pack from bottom right"
-                on:pointerdown|stopPropagation={(event) => beginGummyResize('br', event)}
-              ></button>
-              <button
-                type="button"
-                class="gummy-handle bl"
-                aria-label="Resize gummy pack from bottom left"
-                on:pointerdown|stopPropagation={(event) => beginGummyResize('bl', event)}
-              ></button>
-              <div class="gummy-rotate-anchor">
-                <div class="gummy-rotate-stem"></div>
-                <button
-                  type="button"
-                  class="gummy-rotate-handle"
-                  aria-label="Rotate gummy pack"
-                  on:pointerdown|stopPropagation={beginGummyRotate}
-                ></button>
+            {#if gummyPlacement}
+              {@const placement = gummyPlacement}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                bind:this={gummyOverlayEl}
+                class="gummy-overlay"
+                on:pointermove={continueGummyInteraction}
+                on:pointerup={stopGummyInteraction}
+                on:pointercancel={stopGummyInteraction}
+              >
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="gummy-pack"
+                  style={`left:${placement.centerX}px;top:${placement.centerY}px;width:${placement.width}px;height:${placement.height}px;transform:translate(-50%, -50%) rotate(${placement.rotation}rad);`}
+                  on:pointerdown|stopPropagation={beginGummyMove}
+                >
+                  <img
+                    class="gummy-pack-image"
+                    src={GUMMY_ASSET_URL}
+                    alt=""
+                    aria-hidden="true"
+                    draggable="false"
+                    style={`opacity:${placement.opacity};`}
+                  />
+                  <div class="gummy-pack-outline"></div>
+                  <button
+                    type="button"
+                    class="gummy-handle tl"
+                    aria-label="Resize gummy pack from top left"
+                    on:pointerdown|stopPropagation={(event) => beginGummyResize('tl', event)}
+                  ></button>
+                  <button
+                    type="button"
+                    class="gummy-handle tr"
+                    aria-label="Resize gummy pack from top right"
+                    on:pointerdown|stopPropagation={(event) => beginGummyResize('tr', event)}
+                  ></button>
+                  <button
+                    type="button"
+                    class="gummy-handle br"
+                    aria-label="Resize gummy pack from bottom right"
+                    on:pointerdown|stopPropagation={(event) => beginGummyResize('br', event)}
+                  ></button>
+                  <button
+                    type="button"
+                    class="gummy-handle bl"
+                    aria-label="Resize gummy pack from bottom left"
+                    on:pointerdown|stopPropagation={(event) => beginGummyResize('bl', event)}
+                  ></button>
+                  <div class="gummy-rotate-anchor">
+                    <div class="gummy-rotate-stem"></div>
+                    <button
+                      type="button"
+                      class="gummy-rotate-handle"
+                      aria-label="Rotate gummy pack"
+                      on:pointerdown|stopPropagation={beginGummyRotate}
+                    ></button>
+                  </div>
+                </div>
               </div>
-            </div>
+            {/if}
           </div>
-        {/if}
+        </div>
 
         <div class="editor-overlay-controls">
           {#if gummyPlacement}
-            <button
-              type="button"
-              class="secondary editor-icon-button is-danger"
-              on:click={discardGummyPlacement}
-              disabled={busy || previewBusy || submitting}
-              aria-label="Discard gummy placement"
-              title="Discard gummy placement"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="secondary editor-icon-button is-accept"
-              on:click={applyGummyPlacement}
-              disabled={busy || previewBusy || submitting}
-              aria-label="Apply gummy placement"
-              title="Apply gummy placement"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
-              </svg>
-            </button>
+            {@const placement = gummyPlacement}
+            <div class="editor-icon-cluster">
+              <button
+                type="button"
+                class="secondary editor-icon-button is-danger"
+                on:click={discardGummyPlacement}
+                disabled={busy || previewBusy || submitting}
+                aria-label="Discard gummy placement"
+                title="Discard gummy placement"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary editor-icon-button is-accept"
+                on:click={applyGummyPlacement}
+                disabled={busy || previewBusy || submitting}
+                aria-label="Apply gummy placement"
+                title="Apply gummy placement"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
+                </svg>
+              </button>
+            </div>
+            <label class="editor-overlay-slider">
+              <span>Opacity</span>
+              <input
+                type="range"
+                min="0.05"
+                max="1"
+                step="0.01"
+                value={placement.opacity}
+                aria-label="Gummy pack opacity"
+                on:input={(event) =>
+                  updateGummyOpacity(Number((event.currentTarget as HTMLInputElement).value))}
+              />
+              <strong>{Math.round(placement.opacity * 100)}%</strong>
+            </label>
           {:else}
-            <button
-              type="button"
-              class="secondary editor-icon-button"
-              class:active={tool === 'brush'}
-              on:click={() => selectTool('brush')}
-              disabled={busy || previewBusy || submitting}
-              aria-label="Brush tool"
-              title="Brush"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="m15.88 3.29-7.6 7.6 4.24 4.24 7.6-7.6a1 1 0 0 0 0-1.42l-2.82-2.82a1 1 0 0 0-1.42 0ZM4.5 14.5a3.5 3.5 0 0 0-3.5 3.5c0 1.9 1.65 3.5 4 3.5 2.44 0 4.5-2.06 4.5-4.5A2.5 2.5 0 0 0 7 14.5H4.5Z"
-                ></path>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="secondary editor-icon-button"
-              class:active={tool === 'eraser'}
-              on:click={() => selectTool('eraser')}
-              disabled={busy || previewBusy || submitting}
-              aria-label="Eraser tool"
-              title="Eraser"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="m12.23 3.17-9.06 9.06a2.25 2.25 0 0 0 0 3.18l4.24 4.24A2.25 2.25 0 0 0 9 20.34h.76l10.07-10.07a2.25 2.25 0 0 0 0-3.18l-4.42-4.42a2.25 2.25 0 0 0-3.18 0Zm6 5.51L9.31 17.6h-.38a.75.75 0 0 1-.53-.22l-3.96-3.96a.75.75 0 0 1 0-1.06l8.53-8.53a.75.75 0 0 1 1.06 0l4.2 4.2a.75.75 0 0 1 0 1.06ZM12.5 21h8v2h-8z"
-                ></path>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="secondary editor-icon-button is-gummy"
-              on:click={startGummyPlacement}
-              disabled={busy || previewBusy || submitting || !currentImageUrl}
-              aria-label="Add gummy bear package"
-              title="Add gummy bear package"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="8" cy="7" r="3"></circle>
-                <circle cx="16" cy="7" r="3"></circle>
-                <circle cx="12" cy="11.5" r="6.2"></circle>
-                <circle cx="9.4" cy="11" r="0.8"></circle>
-                <circle cx="14.6" cy="11" r="0.8"></circle>
-                <path d="M9.2 14.4c.9.7 1.8 1 2.8 1s1.9-.3 2.8-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="secondary editor-icon-button is-danger"
-              on:click={cancelEdits}
-              disabled={busy || previewBusy || submitting}
-              aria-label="Cancel edits"
-              title="Cancel edits"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="secondary editor-icon-button is-accent"
-              on:click={breakBone}
-              disabled={previewBusy || busy || submitting || !currentImageUrl}
-              aria-label={previewBusy ? 'Breaking bone' : 'Break bone'}
-              title={previewBusy ? 'Breaking bone...' : 'Break bone'}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m3 21 7-7 2 2-7 7H3v-2Z"></path>
-                <path d="m14.5 3 1.1 2.4L18 6.5l-2.4 1.1L14.5 10l-1.1-2.4L11 6.5l2.4-1.1L14.5 3Z"></path>
-                <path d="m20 10 .7 1.5L22 12l-1.3.5L20 14l-.7-1.5L18 12l1.3-.5L20 10Z"></path>
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="secondary editor-icon-button is-accept"
-              on:click={acceptCurrentImage}
-              disabled={busy || previewBusy || submitting}
-              aria-label="Accept image"
-              title="Accept image"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
-              </svg>
-            </button>
+            <div class="editor-icon-cluster">
+              <button
+                type="button"
+                class="secondary editor-icon-button is-gummy"
+                on:click={startGummyPlacement}
+                disabled={busy || previewBusy || submitting || !currentImageUrl}
+                aria-label="Add gummy bear package"
+                title="Add gummy bear package"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="8" cy="7" r="3"></circle>
+                  <circle cx="16" cy="7" r="3"></circle>
+                  <circle cx="12" cy="11.5" r="6.2"></circle>
+                  <circle cx="9.4" cy="11" r="0.8"></circle>
+                  <circle cx="14.6" cy="11" r="0.8"></circle>
+                  <path d="M9.2 14.4c.9.7 1.8 1 2.8 1s1.9-.3 2.8-1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary editor-icon-button is-danger"
+                on:click={cancelEdits}
+                disabled={busy || previewBusy || submitting}
+                aria-label="Cancel edits"
+                title="Cancel edits"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.4 4.29 19.71 2.87 18.3 9.17 12 2.87 5.71 4.29 4.29l6.3 6.3 6.29-6.3z"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary editor-icon-button is-accent"
+                on:click={breakBone}
+                disabled={previewBusy || busy || submitting || !currentImageUrl}
+                aria-label={previewBusy ? 'Breaking bone' : 'Break bone'}
+                title={previewBusy ? 'Breaking bone...' : 'Break bone'}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m3 21 7-7 2 2-7 7H3v-2Z"></path>
+                  <path d="m14.5 3 1.1 2.4L18 6.5l-2.4 1.1L14.5 10l-1.1-2.4L11 6.5l2.4-1.1L14.5 3Z"></path>
+                  <path d="m20 10 .7 1.5L22 12l-1.3.5L20 14l-.7-1.5L18 12l1.3-.5L20 10Z"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary editor-icon-button is-accept"
+                on:click={acceptCurrentImage}
+                disabled={busy || previewBusy || submitting}
+                aria-label="Accept image"
+                title="Accept image"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 16.17 4.83 12 3.41 13.41 9 19 21 7 19.59 5.59z"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="editor-icon-cluster">
+              <button
+                type="button"
+                class="secondary editor-icon-button"
+                class:active={tool === 'brush'}
+                on:click={() => selectTool('brush')}
+                disabled={busy || previewBusy || submitting}
+                aria-label="Brush tool"
+                title="Brush"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="m15.88 3.29-7.6 7.6 4.24 4.24 7.6-7.6a1 1 0 0 0 0-1.42l-2.82-2.82a1 1 0 0 0-1.42 0ZM4.5 14.5a3.5 3.5 0 0 0-3.5 3.5c0 1.9 1.65 3.5 4 3.5 2.44 0 4.5-2.06 4.5-4.5A2.5 2.5 0 0 0 7 14.5H4.5Z"
+                  ></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary editor-icon-button"
+                class:active={tool === 'eraser'}
+                on:click={() => selectTool('eraser')}
+                disabled={busy || previewBusy || submitting}
+                aria-label="Eraser tool"
+                title="Eraser"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="m12.23 3.17-9.06 9.06a2.25 2.25 0 0 0 0 3.18l4.24 4.24A2.25 2.25 0 0 0 9 20.34h.76l10.07-10.07a2.25 2.25 0 0 0 0-3.18l-4.42-4.42a2.25 2.25 0 0 0-3.18 0Zm6 5.51L9.31 17.6h-.38a.75.75 0 0 1-.53-.22l-3.96-3.96a.75.75 0 0 1 0-1.06l8.53-8.53a.75.75 0 0 1 1.06 0l4.2 4.2a.75.75 0 0 1 0 1.06ZM12.5 21h8v2h-8z"
+                  ></path>
+                </svg>
+              </button>
+            </div>
+            {#if sizeSliderOpen}
+              <label class="editor-overlay-slider">
+                <span>{tool === 'brush' ? 'Brush' : 'Eraser'}</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="64"
+                  step="1"
+                  bind:value={brushSize}
+                  aria-label={tool === 'brush' ? 'Brush size' : 'Eraser size'}
+                />
+                <strong>{Math.round(Number(brushSize))} px</strong>
+              </label>
+            {/if}
+            <div class="editor-icon-cluster">
+              <button
+                type="button"
+                class="secondary editor-icon-button"
+                on:click={zoomOut}
+                disabled={busy || previewBusy || submitting || !zoomRegion}
+                aria-label="Zoom out"
+                title="Zoom out"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10.5 4a6.5 6.5 0 1 0 4.03 11.6l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9ZM7.5 9.5h6v2h-6v-2Z"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary editor-icon-button"
+                class:active={tool === 'zoom'}
+                on:click={selectZoomTool}
+                disabled={busy || previewBusy || submitting || zoomRegion !== null}
+                aria-label="Zoom in"
+                title="Zoom in"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10.5 4a6.5 6.5 0 1 0 4.03 11.6l4.43 4.43 1.41-1.41-4.43-4.43A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Zm-1 2.5v2h-2v2h2v2h2v-2h2v-2h-2v-2h-2Z"></path>
+                </svg>
+              </button>
+            </div>
           {/if}
         </div>
-
-        {#if gummyPlacement}
-          {@const placement = gummyPlacement}
-          <div class="editor-bottom-overlay">
-            <span>Opacity</span>
-            <input
-              type="range"
-              min="0.05"
-              max="1"
-              step="0.01"
-              value={placement.opacity}
-              aria-label="Gummy pack opacity"
-              on:input={(event) =>
-                updateGummyOpacity(Number((event.currentTarget as HTMLInputElement).value))}
-            />
-            <strong>{Math.round(placement.opacity * 100)}%</strong>
-          </div>
-        {:else if sizeSliderOpen}
-          <div class="editor-bottom-overlay">
-            <span>{tool === 'brush' ? 'Brush size' : 'Eraser size'}</span>
-            <input type="range" min="1" max="64" step="1" bind:value={brushSize} />
-            <strong>{Math.round(Number(brushSize))} px</strong>
-          </div>
-        {/if}
       </div>
     {:else}
       <div class="preview-frame">Selected image unavailable</div>
@@ -1418,10 +1741,22 @@
     padding: 0.7rem;
   }
 
+  .editor-viewport-shell {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .editor-viewport {
+    width: fit-content;
+    max-width: 100%;
+    border-radius: 10px;
+  }
+
   .editor-frame {
     position: relative;
     display: inline-block;
-    max-width: 100%;
+    max-width: none;
     border-radius: 10px;
     overflow: hidden;
   }
@@ -1434,6 +1769,16 @@
     border-radius: 10px;
     border: 1px solid var(--border);
     background: #fff;
+  }
+
+  .editor-image.is-sized {
+    position: absolute;
+    inset: auto;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    object-fit: fill;
   }
 
   .editor-canvas {
@@ -1450,6 +1795,10 @@
   .editor-canvas.is-disabled {
     pointer-events: none;
     cursor: default;
+  }
+
+  .editor-canvas.is-zoom-tool {
+    cursor: zoom-in;
   }
 
   .gummy-overlay {
@@ -1560,8 +1909,18 @@
     right: 0.65rem;
     display: grid;
     gap: 0.45rem;
+    justify-items: end;
     pointer-events: none;
     z-index: 4;
+  }
+
+  .editor-icon-cluster {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    max-width: 10rem;
+    pointer-events: none;
   }
 
   .editor-icon-button {
@@ -1608,33 +1967,32 @@
     cursor: not-allowed;
   }
 
-  .editor-bottom-overlay {
-    position: absolute;
-    left: 50%;
-    bottom: 0.7rem;
-    transform: translateX(-50%);
+  .editor-overlay-slider {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
-    padding: 0.45rem 0.7rem;
-    border-radius: 999px;
+    gap: 0.45rem;
+    width: min(18rem, calc(100vw - 3rem));
+    max-width: 100%;
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    border-radius: 8px;
     border: 1px solid rgba(120, 120, 120, 0.35);
     background: rgba(255, 255, 255, 0.95);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
     backdrop-filter: blur(2px);
-    z-index: 4;
     pointer-events: auto;
   }
 
-  .editor-bottom-overlay span,
-  .editor-bottom-overlay strong {
+  .editor-overlay-slider span,
+  .editor-overlay-slider strong {
     font-size: 0.78rem;
     color: #3f454b;
     white-space: nowrap;
   }
 
-  .editor-bottom-overlay input {
-    width: min(220px, 42vw);
+  .editor-overlay-slider input {
+    min-width: 7rem;
+    padding: 0;
   }
 
   .preview-frame {

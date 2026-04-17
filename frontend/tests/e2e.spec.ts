@@ -203,6 +203,38 @@ test('fracture page supports gummy pack placement, apply, and discard', async ({
   await page.goto('/fracture');
   await expect(page.getByText('Case #12')).toBeVisible();
 
+  const editorCanvas = page.locator('.editor-canvas');
+  const initialCanvasBox = await editorCanvas.boundingBox();
+  if (!initialCanvasBox) {
+    throw new Error('Expected fracture editor canvas to be visible');
+  }
+
+  const zoomInButton = page.getByRole('button', { name: 'Zoom in' });
+  const zoomOutButton = page.getByRole('button', { name: 'Zoom out' });
+  await expect(zoomOutButton).toBeDisabled();
+
+  await zoomInButton.click();
+  await expect(page.getByText('Draw a square over the area to zoom into.')).toBeVisible();
+  await expect(page.getByText('Draw square', { exact: true })).toHaveCount(0);
+  await page.mouse.move(initialCanvasBox.x + 90, initialCanvasBox.y + 90);
+  await page.mouse.down();
+  await page.mouse.move(initialCanvasBox.x + 220, initialCanvasBox.y + 220);
+  await page.mouse.up();
+  await expect(page.getByText('Zoomed into selected area.')).toBeVisible();
+  await expect(page.getByText('Zoomed', { exact: true })).toHaveCount(0);
+  await expect(zoomInButton).toBeDisabled();
+  await expect(zoomOutButton).toBeEnabled();
+
+  const zoomedCanvasBox = await editorCanvas.boundingBox();
+  if (!zoomedCanvasBox || Math.abs(zoomedCanvasBox.width - initialCanvasBox.width) > 1) {
+    throw new Error('Expected fracture editor canvas size to stay fixed after zooming in');
+  }
+
+  await zoomOutButton.click();
+  await expect(page.getByText('Showing full image.')).toBeVisible();
+  await expect(zoomOutButton).toBeDisabled();
+  await expect(zoomInButton).toBeEnabled();
+
   await page.getByRole('button', { name: 'Add gummy bear package' }).click();
   await expect(page.getByRole('button', { name: 'Discard gummy placement' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Apply gummy placement' })).toBeVisible();
