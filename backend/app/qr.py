@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
@@ -29,6 +30,7 @@ class QRJobManager:
         self.storage_backend_label = storage.qr_pdf_backend_label()
         self._jobs: dict[str, QRJob] = {}
         self._lock = Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qr-jobs")
 
     def create_job(self, count: int) -> QRJob:
         job_id = uuid4().hex
@@ -42,24 +44,40 @@ class QRJobManager:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
     async def _generate(self, job_id: str, count: int) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                self._executor, self._generate_sync, job_id, count
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self._mark_failed(job_id, exc)
+
+    def _generate_sync(self, job_id: str, count: int) -> None:
         try:
             refs: list[str] = []
             for i in range(count):
                 refs.append(self.storage.create_storage_for_user())
                 self._update_progress(job_id, int(((i + 1) / count) * 80))
 
-            pdf = await asyncio.to_thread(self._build_pdf, refs)
+            self._update_progress(job_id, 90)
+            pdf = self._build_pdf(refs)
             with self._lock:
                 job = self._jobs[job_id]
                 job.pdf_bytes = pdf
                 job.progress = 100
                 job.status = "done"
         except Exception as exc:  # pragma: no cover - defensive
-            with self._lock:
-                job = self._jobs[job_id]
-                job.status = "failed"
-                job.error = str(exc)
+            self._mark_failed(job_id, exc)
+
+    def _mark_failed(self, job_id: str, exc: Exception) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            job.status = "failed"
+            job.error = str(exc)
 
     def _update_progress(self, job_id: str, value: int) -> None:
         with self._lock:

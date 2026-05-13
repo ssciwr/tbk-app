@@ -427,3 +427,51 @@ test('admin QR page ignores stale status responses from an older job', async ({ 
   await page.waitForTimeout(1800);
   await expect(statusLine).toContainText('done');
 });
+
+test('admin QR page retries transient status polling failures', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  await page.route('**/api/admin/qr-jobs', async (route, request) => {
+    if (request.method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ job_id: 'job-retry', status: 'running' })
+    });
+  });
+
+  let statusCalls = 0;
+  await page.route('**/api/admin/qr-jobs/job-retry', async (route) => {
+    statusCalls += 1;
+    if (statusCalls === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'busy' }) });
+      return;
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'done', progress: 100 })
+    });
+  });
+
+  await page.goto('/admin');
+  await page.getByRole('button', { name: 'Start Job' }).click();
+
+  await expect(page.getByText('Temporarily unable to poll QR job state; retrying.')).toBeVisible();
+  await expect.poll(() => statusCalls).toBeGreaterThanOrEqual(2);
+
+  const statusLine = page.locator('p').filter({ hasText: 'Status:' });
+  await expect(statusLine).toContainText('done');
+  await expect(page.getByText('Temporarily unable to poll QR job state; retrying.')).toHaveCount(0);
+});

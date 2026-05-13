@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,7 +12,17 @@ from .state import build_services
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    app = FastAPI(title=settings.APP_NAME)
+    services = build_services(settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.services = services
+        try:
+            yield
+        finally:
+            services.qr_jobs.close()
+
+    app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -20,7 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.state.services = build_services(settings)
+    app.state.services = services
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
