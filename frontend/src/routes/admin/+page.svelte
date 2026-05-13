@@ -15,6 +15,8 @@
   };
 
   const POLL_INTERVAL_MS = 1000;
+  const MAX_CONSECUTIVE_POLL_FAILURES = 120;
+  const RETRYABLE_POLL_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
   let count = 50;
   let jobId = '';
@@ -22,6 +24,7 @@
   let progress = 0;
   let message = '';
   let pollToken = 0;
+  let consecutivePollFailures = 0;
   let activePollController: AbortController | null = null;
 
   async function startJob(): Promise<void> {
@@ -30,6 +33,7 @@
     status = 'starting';
     progress = 0;
     message = '';
+    consecutivePollFailures = 0;
 
     try {
       const response = await authedFetch('/api/admin/qr-jobs', {
@@ -63,6 +67,9 @@
       if (requestedJobId !== jobId || signal.aborted) {
         return false;
       }
+      if (RETRYABLE_POLL_STATUSES.has(response.status)) {
+        return recordPollFailure();
+      }
       message = 'Failed to poll QR job state.';
       stopPolling();
       return false;
@@ -73,6 +80,7 @@
       return false;
     }
 
+    consecutivePollFailures = 0;
     status = data.status;
     progress = data.progress;
     message = status === 'failed' ? data.error ?? 'QR generation failed.' : '';
@@ -99,9 +107,9 @@
         if (controller.signal.aborted || jobId !== requestedJobId || pollToken !== token) {
           return;
         }
-        message = 'Failed to poll QR job state.';
-        stopPolling();
-        return;
+        if (!recordPollFailure()) {
+          return;
+        }
       } finally {
         if (activePollController === controller) {
           activePollController = null;
@@ -124,6 +132,18 @@
       activePollController.abort();
       activePollController = null;
     }
+  }
+
+  function recordPollFailure(): boolean {
+    consecutivePollFailures += 1;
+    if (consecutivePollFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+      message = 'Failed to poll QR job state.';
+      stopPolling();
+      return false;
+    }
+
+    message = 'Temporarily unable to poll QR job state; retrying.';
+    return true;
   }
 
   async function downloadPdf(): Promise<void> {
