@@ -369,9 +369,13 @@ test('results page resolves relative protected image URLs in same-origin mode', 
   await page.goto('/results');
 
   await expect(page.getByText('Case: #3')).toBeVisible();
-  await expect.poll(() => originalFetches).toBe(1);
   await expect.poll(() => xrayFetches).toBe(1);
+  expect(originalFetches).toBe(0);
   await expect(page.getByRole('img', { name: 'Case X-Ray' })).toBeVisible();
+
+  await page.getByLabel('Also show original image').check();
+  await expect.poll(() => originalFetches).toBe(1);
+  await expect(page.getByRole('img', { name: 'Case original' })).toBeVisible();
 });
 
 test('admin QR page ignores stale status responses from an older job', async ({ page }) => {
