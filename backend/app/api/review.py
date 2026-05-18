@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from ..auth import require_auth
 from ..state import Services, get_services
-from ..utils import apply_no_cache_headers
+from ..utils import cached_binary_response
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -29,6 +29,7 @@ async def review_pending(
         payload.append(
             {
                 "case_id": case.case_id,
+                "generation_id": case.generation_id,
                 "status": case.state.value,
                 "received_results": len(case.results),
                 "ready_for_review": case.state.value == "awaiting_review",
@@ -42,10 +43,9 @@ async def review_pending(
                     request.app.url_path_for("review_original", case_id=case.case_id)
                 ),
                 "result_urls": [
-                    str(
-                        request.app.url_path_for(
-                            "review_result", case_id=case.case_id, index=index
-                        )
+                    (
+                        f"{request.app.url_path_for('review_result', case_id=case.case_id, index=index)}"
+                        f"?v={case.generation_id}"
                     )
                     for index in range(len(case.results))
                 ],
@@ -58,6 +58,7 @@ async def review_pending(
 
 @router.get("/{case_id}/original", name="review_original")
 async def review_original(
+    request: Request,
     case_id: int,
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
@@ -69,13 +70,12 @@ async def review_original(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    response = Response(content=image, media_type="image/png")
-    apply_no_cache_headers(response)
-    return response
+    return cached_binary_response(image, request, media_type="image/png")
 
 
 @router.get("/{case_id}/results/{index}", name="review_result")
 async def review_result(
+    request: Request,
     case_id: int,
     index: int,
     _: Annotated[dict, Depends(require_auth)],
@@ -88,9 +88,7 @@ async def review_result(
     except IndexError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    response = Response(content=image, media_type="image/png")
-    apply_no_cache_headers(response)
-    return response
+    return cached_binary_response(image, request, media_type="image/png")
 
 
 @router.post("/{case_id}/decision")

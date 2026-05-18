@@ -113,6 +113,75 @@ async def test_review_confirm_transition(
 
 
 @pytest.mark.anyio
+async def test_review_images_support_private_cache_revalidation(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    case_id = await _create_case_ready_for_review(client, auth_headers, png_bytes)
+
+    pending = await client.get("/api/review/pending", headers=auth_headers)
+    assert pending.status_code == 200
+    pending_case = pending.json()["cases"][0]
+    assert pending_case["case_id"] == case_id
+    result_url = pending_case["result_urls"][0]
+    assert f"v={pending_case['generation_id']}" in result_url
+
+    image = await client.get(result_url, headers=auth_headers)
+    assert image.status_code == 200
+    assert image.headers["etag"]
+    assert "private" in image.headers["cache-control"]
+
+    revalidated = await client.get(
+        result_url,
+        headers={**auth_headers, "If-None-Match": image.headers["etag"]},
+    )
+    assert revalidated.status_code == 304
+    assert revalidated.content == b""
+
+
+@pytest.mark.anyio
+async def test_carousel_manifest_and_images_support_cache_revalidation(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    png_bytes: bytes,
+) -> None:
+    case_id = await _create_case_ready_for_review(client, auth_headers, png_bytes)
+    confirmed = await client.post(
+        f"/api/review/{case_id}/decision",
+        headers=auth_headers,
+        json={"action": "confirm", "choice_index": 0},
+    )
+    assert confirmed.status_code == 200
+    finalized = await client.post(
+        f"/api/fracture/{case_id}/decision",
+        headers=auth_headers,
+        json={"action": "proceed_without_breaking"},
+    )
+    assert finalized.status_code == 200
+
+    carousel = await client.get("/api/carousel", headers=auth_headers)
+    assert carousel.status_code == 200
+    assert carousel.headers["etag"]
+    item = carousel.json()["items"][0]
+    assert item["xray_url"] == f"/api/carousel/items/{case_id}/xray"
+
+    unchanged = await client.get(
+        "/api/carousel",
+        headers={**auth_headers, "If-None-Match": carousel.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+
+    image = await client.get(item["xray_url"], headers=auth_headers)
+    assert image.status_code == 200
+    cached_image = await client.get(
+        item["xray_url"],
+        headers={**auth_headers, "If-None-Match": image.headers["etag"]},
+    )
+    assert cached_image.status_code == 304
+
+
+@pytest.mark.anyio
 async def test_review_finalize_same_qr_increments_filename_counter(
     client: AsyncClient,
     auth_headers: dict[str, str],

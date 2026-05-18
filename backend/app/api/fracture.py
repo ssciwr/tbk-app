@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from ..auth import require_auth
 from ..fracture import fracture_preview_passthrough
 from ..state import Services, get_services
-from ..utils import apply_no_cache_headers
+from ..utils import apply_no_cache_headers, cached_binary_response, ensure_png
 
 router = APIRouter(prefix="/fracture", tags=["fracture"])
 
@@ -29,6 +29,7 @@ async def fracture_pending(
         payload.append(
             {
                 "case_id": case.case_id,
+                "generation_id": case.generation_id,
                 "metadata": {
                     "child_name": case.metadata.child_name,
                     "animal_name": case.metadata.animal_name,
@@ -38,7 +39,8 @@ async def fracture_pending(
                     request.app.url_path_for(
                         "fracture_selected_result", case_id=case.case_id
                     )
-                ),
+                )
+                + f"?v={case.generation_id}",
             }
         )
     return {"cases": payload}
@@ -71,6 +73,7 @@ async def fracture_preview(
 
 @router.get("/{case_id}/selected", name="fracture_selected_result")
 async def fracture_selected_result(
+    request: Request,
     case_id: int,
     _: Annotated[dict, Depends(require_auth)],
     services: Annotated[Services, Depends(get_services)],
@@ -82,9 +85,7 @@ async def fracture_selected_result(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    response = Response(content=image, media_type="image/png")
-    apply_no_cache_headers(response)
-    return response
+    return cached_binary_response(image, request, media_type="image/png")
 
 
 @router.post("/{case_id}/decision")
@@ -124,6 +125,11 @@ async def fracture_submit(
     image_bytes = await image.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Submitted fracture image is empty")
+    if not image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        try:
+            image_bytes = ensure_png(image_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
         services.queue.finalize_case(

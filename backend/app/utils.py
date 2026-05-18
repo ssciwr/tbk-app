@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 from io import BytesIO
 
-from fastapi import Response
-from PIL import Image, UnidentifiedImageError
+from fastapi import Request, Response, status
+from PIL import Image, ImageChops, UnidentifiedImageError
 
 
 def ensure_png(image_bytes: bytes) -> bytes:
@@ -12,8 +13,18 @@ def ensure_png(image_bytes: bytes) -> bytes:
     except UnidentifiedImageError as exc:
         raise ValueError("Uploaded file is not a valid image") from exc
 
+    image.load()
+    if image.mode in {"RGBA", "LA"} or (
+        image.mode == "P" and "transparency" in image.info
+    ):
+        normalized = image.convert("RGBA")
+    else:
+        normalized = (
+            image.convert("L") if _is_grayscale(image) else image.convert("RGB")
+        )
+
     output = BytesIO()
-    image.convert("RGBA").save(output, format="PNG")
+    normalized.save(output, format="PNG", optimize=True)
     return output.getvalue()
 
 
@@ -21,6 +32,45 @@ def apply_no_cache_headers(response: Response) -> None:
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+
+
+def etag_for_bytes(content: bytes) -> str:
+    return f'"{hashlib.sha256(content).hexdigest()}"'
+
+
+def apply_private_cache_headers(
+    response: Response, *, etag: str, max_age_seconds: int = 3600
+) -> None:
+    response.headers["Cache-Control"] = f"private, max-age={max_age_seconds}"
+    response.headers["ETag"] = etag
+    response.headers["Vary"] = "Authorization"
+
+
+def cached_binary_response(
+    content: bytes,
+    request: Request,
+    *,
+    media_type: str,
+    max_age_seconds: int = 3600,
+) -> Response:
+    etag = etag_for_bytes(content)
+    if request.headers.get("if-none-match") == etag:
+        response = Response(status_code=status.HTTP_304_NOT_MODIFIED)
+    else:
+        response = Response(content=content, media_type=media_type)
+    apply_private_cache_headers(response, etag=etag, max_age_seconds=max_age_seconds)
+    return response
+
+
+def _is_grayscale(image: Image.Image) -> bool:
+    if image.mode in {"1", "L"}:
+        return True
+    rgb_image = image.convert("RGB")
+    red, green, blue = rgb_image.split()
+    return (
+        ImageChops.difference(red, green).getbbox() is None
+        and ImageChops.difference(red, blue).getbbox() is None
+    )
 
 
 def combine_images_side_by_side(left_bytes: bytes, right_bytes: bytes) -> bytes:

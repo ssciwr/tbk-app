@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { authedFetch, authedFetchUrl } from '$lib/api';
+  import { authedFetch } from '$lib/api';
   import { requireAuthRedirect } from '$lib/auth';
+  import { createAsyncPoller, type AsyncPoller } from '$lib/polling';
+  import {
+    loadProtectedImageSrc,
+    retainProtectedImageKeys,
+    revokeProtectedImagePrefix
+  } from '$lib/protectedImages';
 
   type ApiCarouselItem = {
     case_id: number;
@@ -34,34 +40,21 @@
 
   let status = '';
   let autoplayHandle: ReturnType<typeof setInterval> | null = null;
-  let refreshHandle: ReturnType<typeof setInterval> | null = null;
-  let activeObjectUrls: string[] = [];
+  let refreshPoller: AsyncPoller | null = null;
+  let carouselEtag: string | null = null;
+  let visibleImageSignature = '';
 
-  function revokeObjectUrls(urls: string[]): void {
-    for (const url of urls) {
-      URL.revokeObjectURL(url);
-    }
+  function imageKey(item: ApiCarouselItem, kind: 'xray' | 'original'): string {
+    return `carousel:${item.case_id}:${item.approved_at}:${kind}`;
   }
 
-  async function toProtectedImageSrc(url: string, objectUrls: string[]): Promise<string | null> {
-    if (!url) {
-      return null;
-    }
-    if (url.startsWith('data:') || url.startsWith('blob:')) {
-      return url;
-    }
-    try {
-      const response = await authedFetchUrl(url);
-      if (!response.ok) {
-        return null;
-      }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      objectUrls.push(objectUrl);
-      return objectUrl;
-    } catch {
-      return null;
-    }
+  function sameCarouselItem(left: ApiCarouselItem, right: ApiCarouselItem): boolean {
+    return left.case_id === right.case_id && left.approved_at === right.approved_at;
+  }
+
+  function existingImageSrc(item: ApiCarouselItem, kind: 'xray' | 'original'): string | null {
+    const existing = items.find((candidate) => sameCarouselItem(candidate, item));
+    return kind === 'xray' ? existing?.xray_src ?? null : existing?.original_src ?? null;
   }
 
   function next(): void {
@@ -71,50 +64,110 @@
     index = (index + 1) % items.length;
   }
 
-  function restartTimers(): void {
+  function restartAutoplay(): void {
     if (autoplayHandle) {
       clearInterval(autoplayHandle);
       autoplayHandle = null;
     }
-    if (refreshHandle) {
-      clearInterval(refreshHandle);
-      refreshHandle = null;
-    }
 
     autoplayHandle = setInterval(next, intervalMs);
-    refreshHandle = setInterval(loadItems, intervalMs);
   }
 
-  async function loadItems(): Promise<void> {
-    const response = await authedFetch('/api/carousel');
-    if (!response.ok) {
-      status = 'Failed to load carousel.';
+  function retainCurrentCarouselImages(nextItems: ApiCarouselItem[]): void {
+    const activeKeys = new Set<string>();
+    for (const item of nextItems) {
+      activeKeys.add(imageKey(item, 'xray'));
+      activeKeys.add(imageKey(item, 'original'));
+    }
+    retainProtectedImageKeys('carousel:', activeKeys);
+  }
+
+  async function ensureItemImages(itemIndex = index, signal?: AbortSignal): Promise<void> {
+    const item = items[itemIndex];
+    if (!item) {
       return;
     }
 
+    const [originalSrc, xraySrc] = await Promise.all([
+      loadProtectedImageSrc(item.original_url, imageKey(item, 'original'), signal),
+      loadProtectedImageSrc(item.xray_url, imageKey(item, 'xray'), signal)
+    ]);
+
+    if (signal?.aborted) {
+      return;
+    }
+
+    items = items.map((candidate) =>
+      sameCarouselItem(candidate, item)
+        ? {
+            ...candidate,
+            original_src: originalSrc ?? candidate.original_src,
+            xray_src: xraySrc ?? candidate.xray_src
+          }
+        : candidate
+    );
+  }
+
+  function prefetchNextImages(): void {
+    if (items.length < 2) {
+      return;
+    }
+    const nextIndex = (index + 1) % items.length;
+    const item = items[nextIndex];
+    void loadProtectedImageSrc(item.original_url, imageKey(item, 'original')).catch(() => undefined);
+    void loadProtectedImageSrc(item.xray_url, imageKey(item, 'xray')).catch(() => undefined);
+  }
+
+  async function loadItems(signal?: AbortSignal): Promise<void> {
+    const headers = new Headers();
+    if (carouselEtag) {
+      headers.set('If-None-Match', carouselEtag);
+    }
+    const response = await authedFetch('/api/carousel', { headers, signal });
+    if (response.status === 304) {
+      status = '';
+      prefetchNextImages();
+      return;
+    }
+    if (!response.ok) {
+      status = 'Failed to load carousel.';
+      throw new Error('Failed to load carousel');
+    }
+
     const data = (await response.json()) as CarouselResponse;
+    carouselEtag = response.headers.get('ETag') ?? carouselEtag;
     intervalMs = Math.max(1000, data.autoplay_interval_seconds * 1000);
 
-    const nextObjectUrls: string[] = [];
-    const hydratedItems: CarouselItem[] = await Promise.all(
-      data.items.map(async (item) => ({
-        ...item,
-        original_src: await toProtectedImageSrc(item.original_url, nextObjectUrls),
-        xray_src: await toProtectedImageSrc(item.xray_url, nextObjectUrls)
-      }))
-    );
-
-    const previousObjectUrls = activeObjectUrls;
-    activeObjectUrls = nextObjectUrls;
-    revokeObjectUrls(previousObjectUrls);
-    items = hydratedItems;
+    retainCurrentCarouselImages(data.items);
+    items = data.items.map((item) => ({
+      ...item,
+      original_src: existingImageSrc(item, 'original'),
+      xray_src: existingImageSrc(item, 'xray')
+    }));
     status = '';
 
     if (index >= items.length) {
       index = Math.max(0, items.length - 1);
     }
 
-    restartTimers();
+    const currentItem = items[index];
+    visibleImageSignature = currentItem ? `${currentItem.case_id}:${currentItem.approved_at}` : '';
+    await ensureItemImages(index, signal);
+    prefetchNextImages();
+    restartAutoplay();
+  }
+
+  $: {
+    const item = items[index];
+    const signature = item ? `${item.case_id}:${item.approved_at}` : '';
+    if (signature && signature !== visibleImageSignature) {
+      visibleImageSignature = signature;
+      void ensureItemImages(index)
+        .then(() => prefetchNextImages())
+        .catch(() => {
+          status = 'Failed to load carousel image.';
+        });
+    }
   }
 
   onMount(async () => {
@@ -124,17 +177,21 @@
     }
 
     await loadItems();
+    refreshPoller = createAsyncPoller((signal) => loadItems(signal), {
+      intervalMs,
+      maxIntervalMs: Math.max(intervalMs, 30000),
+      pauseWhenHidden: true
+    });
+    refreshPoller.start(false);
   });
 
   onDestroy(() => {
     if (autoplayHandle) {
       clearInterval(autoplayHandle);
     }
-    if (refreshHandle) {
-      clearInterval(refreshHandle);
-    }
-    revokeObjectUrls(activeObjectUrls);
-    activeObjectUrls = [];
+    refreshPoller?.stop();
+    refreshPoller = null;
+    revokeProtectedImagePrefix('carousel:');
   });
 </script>
 

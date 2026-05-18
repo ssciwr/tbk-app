@@ -2,9 +2,16 @@
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
   import FractureEditorInline from '$lib/components/FractureEditorInline.svelte';
-  import { authedFetch, authedFetchUrl, loadAppConfig } from '$lib/api';
+  import { authedFetch, loadAppConfig } from '$lib/api';
   import { formatCaseSubject, hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
+  import { imageExtensionForType } from '$lib/imageEncoding';
+  import { createAsyncPoller, type AsyncPoller } from '$lib/polling';
+  import {
+    loadProtectedImageSrc,
+    retainProtectedImageKeys,
+    revokeProtectedImagePrefix
+  } from '$lib/protectedImages';
 
   type FinalizeAction = 'proceed_without_breaking' | 'apply_bone_breaking';
   type FinalizeRequest = {
@@ -14,6 +21,7 @@
 
   type ApiPendingFractureCase = {
     case_id: number;
+    generation_id: number;
     metadata: {
       child_name: string;
       animal_name: string;
@@ -31,54 +39,34 @@
   let error = '';
   let actionMessage = '';
   let decidingCaseId: number | null = null;
-  let pollHandle: ReturnType<typeof setInterval> | null = null;
-  let activeObjectUrls: string[] = [];
+  let poller: AsyncPoller | null = null;
 
-  function revokeObjectUrls(urls: string[]): void {
-    for (const url of urls) {
-      URL.revokeObjectURL(url);
-    }
+  function selectedImageKey(pending: ApiPendingFractureCase): string {
+    return `fracture:${pending.case_id}:${pending.generation_id}:selected`;
   }
 
-  async function toProtectedImageSrc(url: string, objectUrls: string[]): Promise<string | null> {
-    if (!url) {
-      return null;
-    }
-    if (url.startsWith('data:') || url.startsWith('blob:')) {
-      return url;
-    }
-
-    const response = await authedFetchUrl(url);
-    if (!response.ok) {
-      return null;
-    }
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    objectUrls.push(objectUrl);
-    return objectUrl;
-  }
-
-  async function loadPending(): Promise<void> {
-    const response = await authedFetch('/api/fracture/pending');
+  async function loadPending(signal?: AbortSignal): Promise<void> {
+    const response = await authedFetch('/api/fracture/pending', { signal });
     if (!response.ok) {
       error = 'Failed to load pending bone breaking cases.';
       loading = false;
-      return;
+      throw new Error('Failed to load pending bone breaking cases');
     }
 
     const data = (await response.json()) as { cases: ApiPendingFractureCase[] };
-    const nextObjectUrls: string[] = [];
+    const activeKeys = new Set<string>();
     const hydrated = await Promise.all(
       data.cases.map(async (pending): Promise<PendingFractureCase> => {
-        const selected = await toProtectedImageSrc(pending.selected_url, nextObjectUrls);
+        const key = selectedImageKey(pending);
+        activeKeys.add(key);
+        const selected = await loadProtectedImageSrc(pending.selected_url, key, signal);
         return { ...pending, selected_url: selected };
       })
     );
 
-    const previousObjectUrls = activeObjectUrls;
-    activeObjectUrls = nextObjectUrls;
-    revokeObjectUrls(previousObjectUrls);
+    retainProtectedImageKeys('fracture:', activeKeys);
     cases = hydrated;
+    error = '';
     loading = false;
   }
 
@@ -89,7 +77,8 @@
       let response: Response;
       if (request.imageBlob) {
         const form = new FormData();
-        form.append('image', request.imageBlob, `fracture-${caseId}.png`);
+        const extension = imageExtensionForType(request.imageBlob.type);
+        form.append('image', request.imageBlob, `fracture-${caseId}.${extension}`);
         response = await authedFetch(`/api/fracture/${caseId}/submit`, {
           method: 'POST',
           body: form
@@ -126,20 +115,25 @@
     }
 
     await loadPending();
-    pollHandle = setInterval(() => {
-      if (!loading && cases.length === 0) {
-        void loadPending();
+    poller = createAsyncPoller(
+      async (signal) => {
+        if (!loading && cases.length === 0) {
+          await loadPending(signal);
+        }
+      },
+      {
+        intervalMs: 2000,
+        maxIntervalMs: 15000,
+        pauseWhenHidden: true
       }
-    }, 2000);
+    );
+    poller.start(false);
   });
 
   onDestroy(() => {
-    if (pollHandle) {
-      clearInterval(pollHandle);
-      pollHandle = null;
-    }
-    revokeObjectUrls(activeObjectUrls);
-    activeObjectUrls = [];
+    poller?.stop();
+    poller = null;
+    revokeProtectedImagePrefix('fracture:');
   });
 </script>
 

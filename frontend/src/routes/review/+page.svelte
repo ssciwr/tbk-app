@@ -1,12 +1,19 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
-  import { authedFetch, authedFetchUrl } from '$lib/api';
+  import { authedFetch } from '$lib/api';
   import { hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
+  import { createAsyncPoller, type AsyncPoller } from '$lib/polling';
+  import {
+    loadProtectedImageSrc,
+    retainProtectedImageKeys,
+    revokeProtectedImagePrefix
+  } from '$lib/protectedImages';
 
   type ApiPendingCase = {
     case_id: number;
+    generation_id: number;
     status: 'queued' | 'collecting_results' | 'retried' | 'awaiting_review';
     received_results: number;
     ready_for_review: boolean;
@@ -32,44 +39,32 @@
   let error = '';
   let actionMessage = '';
   let decidingCaseId: number | null = null;
-  let pollHandle: ReturnType<typeof setInterval> | null = null;
-  let activeObjectUrls: string[] = [];
+  let poller: AsyncPoller | null = null;
   let animalTypeDrafts: Record<number, string> = {};
 
-  function revokeObjectUrls(urls: string[]): void {
-    for (const url of urls) {
-      URL.revokeObjectURL(url);
-    }
+  function originalImageKey(pending: ApiPendingCase): string {
+    return `review:${pending.case_id}:original`;
   }
 
-  async function toProtectedImageSrc(url: string, objectUrls: string[]): Promise<string | null> {
-    if (!url) {
-      return null;
-    }
-    if (url.startsWith('data:') || url.startsWith('blob:')) {
-      return url;
-    }
-    try {
-      const response = await authedFetchUrl(url);
-      if (!response.ok) {
-        return null;
-      }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      objectUrls.push(objectUrl);
-      return objectUrl;
-    } catch {
-      return null;
-    }
+  function resultImageKey(pending: ApiPendingCase, index: number): string {
+    return `review:${pending.case_id}:${pending.generation_id}:result:${index}`;
   }
 
   async function hydrateCaseImages(
     pending: ApiPendingCase,
-    objectUrls: string[]
+    activeKeys: Set<string>,
+    signal?: AbortSignal
   ): Promise<PendingCase> {
+    activeKeys.add(originalImageKey(pending));
+    pending.result_urls.forEach((_, index) => activeKeys.add(resultImageKey(pending, index)));
+
     const [originalSrc, resultSrcs] = await Promise.all([
-      toProtectedImageSrc(pending.original_url, objectUrls),
-      Promise.all(pending.result_urls.map((url) => toProtectedImageSrc(url, objectUrls)))
+      loadProtectedImageSrc(pending.original_url, originalImageKey(pending), signal),
+      Promise.all(
+        pending.result_urls.map((url, index) =>
+          loadProtectedImageSrc(url, resultImageKey(pending, index), signal)
+        )
+      )
     ]);
 
     return {
@@ -98,24 +93,23 @@
     };
   }
 
-  async function loadPending(): Promise<void> {
-    const response = await authedFetch('/api/review/pending');
+  async function loadPending(signal?: AbortSignal): Promise<void> {
+    const response = await authedFetch('/api/review/pending', { signal });
     if (!response.ok) {
       error = 'Failed to load pending review cases.';
       loading = false;
-      return;
+      throw new Error('Failed to load pending review cases');
     }
 
     const data = (await response.json()) as { cases: ApiPendingCase[] };
-    const nextObjectUrls: string[] = [];
+    const activeKeys = new Set<string>();
     const hydratedCases = await Promise.all(
-      data.cases.map((pending) => hydrateCaseImages(pending, nextObjectUrls))
+      data.cases.map((pending) => hydrateCaseImages(pending, activeKeys, signal))
     );
-    const previousObjectUrls = activeObjectUrls;
-    activeObjectUrls = nextObjectUrls;
-    revokeObjectUrls(previousObjectUrls);
+    retainProtectedImageKeys('review:', activeKeys);
     syncAnimalTypeDrafts(hydratedCases);
     cases = hydratedCases;
+    error = '';
     loading = false;
   }
 
@@ -180,16 +174,18 @@
     }
 
     await loadPending();
-    pollHandle = setInterval(loadPending, 2000);
+    poller = createAsyncPoller((signal) => loadPending(signal), {
+      intervalMs: 2000,
+      maxIntervalMs: 15000,
+      pauseWhenHidden: true
+    });
+    poller.start(false);
   });
 
   onDestroy(() => {
-    if (pollHandle) {
-      clearInterval(pollHandle);
-      pollHandle = null;
-    }
-    revokeObjectUrls(activeObjectUrls);
-    activeObjectUrls = [];
+    poller?.stop();
+    poller = null;
+    revokeProtectedImagePrefix('review:');
   });
 </script>
 

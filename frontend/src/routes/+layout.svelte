@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { authToken, clearToken, loadAppConfig, loadRunnerStatus } from '$lib/api';
   import { goto } from '$app/navigation';
+  import { createAsyncPoller, type AsyncPoller } from '$lib/polling';
 
   type StageKey = 'patient-data' | 'camera' | 'review' | 'fracture' | 'results';
   type PipelineStage = {
@@ -37,7 +38,7 @@
   let configLoadingForToken: string | null = null;
   let pipelineStages: PipelineStage[] = [];
   let runnerConnected: boolean | null = null;
-  let runnerStatusPollHandle: ReturnType<typeof setInterval> | null = null;
+  let runnerStatusPoller: AsyncPoller | null = null;
   let runnerStatusToken: string | null = null;
 
   async function syncAppConfig(force = false): Promise<void> {
@@ -55,32 +56,32 @@
     fractureStageEnabled = config.fracture_editor_enabled;
   }
 
-  async function refreshRunnerStatus(): Promise<void> {
+  async function refreshRunnerStatus(signal?: AbortSignal): Promise<void> {
     if (!$authToken) {
       runnerConnected = null;
       return;
     }
 
-    const status = await loadRunnerStatus();
+    const status = await loadRunnerStatus(signal);
     if (!status) {
-      return;
+      throw new Error('Failed to load runner status');
     }
     runnerConnected = status.runner_connected;
   }
 
   function stopRunnerStatusPolling(): void {
-    if (runnerStatusPollHandle) {
-      clearInterval(runnerStatusPollHandle);
-      runnerStatusPollHandle = null;
-    }
+    runnerStatusPoller?.stop();
+    runnerStatusPoller = null;
   }
 
   function startRunnerStatusPolling(): void {
     stopRunnerStatusPolling();
-    void refreshRunnerStatus();
-    runnerStatusPollHandle = setInterval(() => {
-      void refreshRunnerStatus();
-    }, RUNNER_STATUS_POLL_MS);
+    runnerStatusPoller = createAsyncPoller((signal) => refreshRunnerStatus(signal), {
+      intervalMs: RUNNER_STATUS_POLL_MS,
+      maxIntervalMs: 30000,
+      pauseWhenHidden: true
+    });
+    runnerStatusPoller.start();
   }
 
   $: pipelineStages = basePipelineStages.map((stage) => ({

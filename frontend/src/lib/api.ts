@@ -127,9 +127,9 @@ export async function loadAppConfig(force = false): Promise<AppConfig> {
   return cachedAppConfig;
 }
 
-export async function loadRunnerStatus(): Promise<RunnerStatus | null> {
+export async function loadRunnerStatus(signal?: AbortSignal): Promise<RunnerStatus | null> {
   try {
-    const response = await authedFetch('/api/worker/status', { cache: 'no-store' });
+    const response = await authedFetch('/api/worker/status', { cache: 'no-store', signal });
     if (!response.ok) {
       return null;
     }

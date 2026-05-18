@@ -5,6 +5,12 @@
   import { rememberProfiledCamera, startProfiledCamera, switchProfiledCamera } from '$lib/camera';
   import { formatCaseSubject, hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
+  import {
+    canvasToUploadBlob,
+    compressImageFileForUpload,
+    imageExtensionForType
+  } from '$lib/imageEncoding';
+  import { createAsyncPoller, type AsyncPoller } from '$lib/polling';
 
   type PendingImageCase = {
     case_id: number;
@@ -34,7 +40,7 @@
 
   let videoEl: HTMLVideoElement | null = null;
   let stream: MediaStream | null = null;
-  let pollHandle: ReturnType<typeof setInterval> | null = null;
+  let poller: AsyncPoller | null = null;
   let uploadInputEl: HTMLInputElement | null = null;
 
   let capturedFile: File | null = null;
@@ -114,12 +120,16 @@
     }
   }
 
-  async function loadPendingCases(): Promise<void> {
-    const response = await authedFetch('/api/cases/pending-image');
+  const CAMERA_UPLOAD_MAX_SIDE = 960;
+  const FILE_UPLOAD_MAX_SIDE = 1080;
+  const IMAGE_UPLOAD_QUALITY = 0.82;
+
+  async function loadPendingCases(signal?: AbortSignal): Promise<void> {
+    const response = await authedFetch('/api/cases/pending-image', { signal });
     if (!response.ok) {
       loadError = 'Failed to load cases waiting for image acquisition.';
       loadingCases = false;
-      return;
+      throw new Error('Failed to load pending image cases');
     }
 
     const data = (await response.json()) as { cases: PendingImageCase[] };
@@ -594,13 +604,17 @@
       }
 
       context.drawImage(image, sourceX, sourceY, side, side, 0, 0, side, side);
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      const blob = await canvasToUploadBlob(canvas, {
+        maxSide: CAMERA_UPLOAD_MAX_SIDE,
+        quality: IMAGE_UPLOAD_QUALITY
+      });
       if (!blob) {
         captureMessage = 'Failed to encode cropped image.';
         return;
       }
 
-      setCaptured(new File([blob], `capture-${Date.now()}.png`, { type: 'image/png' }));
+      const extension = imageExtensionForType(blob.type);
+      setCaptured(new File([blob], `capture-${Date.now()}.${extension}`, { type: blob.type }));
       captureMessage = 'Image cropped.';
     } catch {
       captureMessage = 'Failed to crop image.';
@@ -638,13 +652,17 @@
     }
 
     context.drawImage(videoEl, sx, sy, side, side, 0, 0, side, side);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const blob = await canvasToUploadBlob(canvas, {
+      maxSide: CAMERA_UPLOAD_MAX_SIDE,
+      quality: IMAGE_UPLOAD_QUALITY
+    });
     if (!blob) {
       captureMessage = 'Failed to encode captured image.';
       return;
     }
 
-    setCaptured(new File([blob], `capture-${Date.now()}.png`, { type: 'image/png' }));
+    const extension = imageExtensionForType(blob.type);
+    setCaptured(new File([blob], `capture-${Date.now()}.${extension}`, { type: blob.type }));
     captureMessage = 'Image captured. Cancel or accept.';
   }
 
@@ -653,12 +671,22 @@
     void videoEl.play();
   }
 
-  function onFileChange(event: Event): void {
+  async function onFileChange(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     if (file) {
-      captureMessage = 'Image loaded. Cancel or accept.';
-      setCaptured(file);
+      captureMessage = 'Preparing image. Cancel or accept.';
+      try {
+        const compressed = await compressImageFileForUpload(file, {
+          maxSide: FILE_UPLOAD_MAX_SIDE,
+          quality: IMAGE_UPLOAD_QUALITY
+        });
+        setCaptured(compressed);
+        captureMessage = 'Image loaded. Cancel or accept.';
+      } catch {
+        setCaptured(file);
+        captureMessage = 'Image loaded without compression. Cancel or accept.';
+      }
     }
     input.value = '';
   }
@@ -732,15 +760,18 @@
     }
     window.addEventListener('keydown', handleCaptureShortcut);
     await Promise.all([startCamera(), loadPendingCases()]);
-    pollHandle = setInterval(loadPendingCases, 2000);
+    poller = createAsyncPoller((signal) => loadPendingCases(signal), {
+      intervalMs: 2000,
+      maxIntervalMs: 15000,
+      pauseWhenHidden: true
+    });
+    poller.start(false);
   });
 
   onDestroy(() => {
     window.removeEventListener('keydown', handleCaptureShortcut);
-    if (pollHandle) {
-      clearInterval(pollHandle);
-      pollHandle = null;
-    }
+    poller?.stop();
+    poller = null;
     stopCamera();
     revokePreview();
   });

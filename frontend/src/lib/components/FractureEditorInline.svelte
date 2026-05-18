@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { canvasToUploadBlob } from '$lib/imageEncoding';
 
   export let caseId: number;
   export let caseLabel = '';
@@ -55,6 +56,8 @@
   const GUMMY_DEFAULT_OPACITY = 0.5;
   const GUMMY_MIN_WIDTH = 52;
   const ZOOM_SELECTION_MIN_SIZE = 24;
+  const EDITOR_UPLOAD_MAX_SIDE = 1080;
+  const EDITOR_IMAGE_QUALITY = 0.84;
 
   let currentImageUrl: string | null = null;
   let baseImageUrl: string | null = null;
@@ -648,8 +651,9 @@
   }
 
   async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
-    return new Promise((resolve) => {
-      canvas.toBlob((blob) => resolve(blob), 'image/png');
+    return canvasToUploadBlob(canvas, {
+      maxSide: EDITOR_UPLOAD_MAX_SIDE,
+      quality: EDITOR_IMAGE_QUALITY
     });
   }
 
@@ -1408,6 +1412,31 @@
     resetPreview();
   }
 
+  async function currentImageBlobForSubmission(): Promise<Blob | null> {
+    if (imageEl && imageEl.naturalWidth > 0 && imageEl.naturalHeight > 0) {
+      const canvas = document.createElement('canvas');
+      canvas.width = imageEl.naturalWidth;
+      canvas.height = imageEl.naturalHeight;
+      const context = canvas.getContext('2d');
+      if (context) {
+        context.drawImage(imageEl, 0, 0, canvas.width, canvas.height);
+        const encodedBlob = await canvasToBlob(canvas);
+        if (encodedBlob && encodedBlob.size > 0) {
+          return encodedBlob;
+        }
+      }
+    }
+
+    if (!currentImageUrl) {
+      return null;
+    }
+    const response = await fetch(currentImageUrl);
+    if (!response.ok) {
+      return null;
+    }
+    return response.blob();
+  }
+
   async function acceptCurrentImage(): Promise<void> {
     if (!currentImageUrl || busy || previewBusy || submitting || gummyPlacement) {
       return;
@@ -1416,12 +1445,7 @@
     submitting = true;
     message = '';
     try {
-      const response = await fetch(currentImageUrl);
-      if (!response.ok) {
-        message = 'Failed to prepare image for submission.';
-        return;
-      }
-      const imageBlob = await response.blob();
+      const imageBlob = await currentImageBlobForSubmission();
       if (!imageBlob || imageBlob.size === 0) {
         message = 'Generated image is empty and cannot be submitted.';
         return;
