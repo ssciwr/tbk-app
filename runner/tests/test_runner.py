@@ -106,14 +106,14 @@ def test_chroma_resolve_workflow_file_uses_runner_assets_for_bare_name(
     chroma_module = runner_module.chroma
     assets_dir = tmp_path / "runner" / "assets"
     assets_dir.mkdir(parents=True)
-    expected = (assets_dir / "unit-test-background.png").resolve()
+    expected = (assets_dir / "unit-test-watermark.png").resolve()
     expected.write_bytes(b"asset")
 
     monkeypatch.chdir(tmp_path)
 
     resolved = chroma_module._resolve_workflow_file(
-        "unit-test-background.png",
-        description="monochrome background",
+        "unit-test-watermark.png",
+        description="watermark",
     )
 
     assert Path(resolved) == expected
@@ -316,67 +316,13 @@ def test_chroma_generate_prompt_with_mistral_deletes_uploaded_file_on_failure(
     assert deleted_file_ids == ["file-123"]
 
 
-def test_chroma_first_pass_uses_watchdog_output_when_available(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    chroma_module = runner_module.chroma
-    monkeypatch.setattr(
-        chroma_module,
-        "_run_first_pass_alpha_with_watchdog",
-        lambda *_args, **_kwargs: Image.new("RGB", (4, 4), color=(7, 11, 13)),
-    )
-    monkeypatch.setattr(
-        chroma_module,
-        "_run_first_pass_remove",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("fallback should not run")
-        ),
-    )
-
-    result = chroma_module.remove_background_first_pass(
-        Image.new("RGB", (4, 4), color=(10, 10, 10)),
-        session=object(),
-    )
-
-    assert result.mode == "RGBA"
-    assert result.getpixel((0, 0)) == (7, 11, 13, 255)
-
-
-def test_chroma_first_pass_retries_without_alpha_matting_when_watchdog_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    chroma_module = runner_module.chroma
-    monkeypatch.setattr(
-        chroma_module,
-        "_run_first_pass_alpha_with_watchdog",
-        lambda *_args, **_kwargs: None,
-    )
-    calls: list[bool] = []
-
-    def _fake_remove(_image: Image.Image, **kwargs: Any) -> Image.Image:
-        calls.append(bool(kwargs["alpha_matting"]))
-        return Image.new("RGB", (4, 4), color=(0, 255, 0))
-
-    monkeypatch.setattr(chroma_module, "_run_first_pass_remove", _fake_remove)
-
-    result = chroma_module.remove_background_first_pass(
-        Image.new("RGB", (4, 4), color=(10, 10, 10)),
-        session=object(),
-    )
-
-    assert calls == [False]
-    assert result.mode == "RGBA"
-    assert result.getpixel((0, 0)) == (0, 255, 0, 255)
-
-
-def test_chroma_setup_initializes_only_single_rembg_session(
+def test_chroma_setup_loads_models_without_background_removal_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     chroma_module = runner_module.chroma
     workflow = chroma_module.ChromaWorkflow()
     workflow.configure(mistral_api_key="test-key")
 
-    session_models: list[str] = []
     fake_sdxl_pipe = object()
     monkeypatch.setattr(chroma_module, "_CHROMA_IMPORT_ERROR", None)
     monkeypatch.setattr(chroma_module, "torch", object())
@@ -385,20 +331,16 @@ def test_chroma_setup_initializes_only_single_rembg_session(
         "pick_device_dtype",
         lambda *_args, **_kwargs: ("cpu", "float32"),
     )
-    monkeypatch.setattr(
-        chroma_module,
-        "new_session",
-        lambda *, model_name: session_models.append(model_name) or object(),
-    )
 
     class _PipelineWithTo:
         def to(self, _device: str) -> "_PipelineWithTo":
             return self
 
+    fake_pipe = _PipelineWithTo()
     monkeypatch.setattr(
         chroma_module,
         "load_pipeline",
-        lambda **_kwargs: _PipelineWithTo(),
+        lambda **_kwargs: fake_pipe,
     )
     monkeypatch.setattr(
         chroma_module,
@@ -408,18 +350,17 @@ def test_chroma_setup_initializes_only_single_rembg_session(
 
     workflow.setup()
 
-    assert session_models == ["u2net"]
+    assert workflow._pipe is fake_pipe
+    assert workflow._sdxl_pipe is fake_sdxl_pipe
 
 
-def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
+def test_chroma_generate_uses_resized_input_directly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     chroma_module = runner_module.chroma
     workflow = chroma_module.ChromaWorkflow()
     workflow.mistral_api_key = "test-key"
-    workflow._torch = object()
     workflow._device = "cpu"
-    workflow._first_pass_session = object()
 
     class _FakeGeneratorTorch:
         @staticmethod
@@ -432,24 +373,23 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
 
     workflow._torch = _FakeGeneratorTorch()
 
-    first_pass_image = Image.new("RGBA", (1024, 1024), color=(10, 20, 30, 40))
-    monochrome_input: list[Image.Image] = []
+    vlm_images: list[Image.Image] = []
     debug_images: list[str] = []
 
-    def _fake_first_pass(_image: Image.Image, session: Any) -> Image.Image:
-        assert session is workflow._first_pass_session
-        return first_pass_image
-
-    def _fake_add_background(image: Image.Image) -> Image.Image:
-        monochrome_input.append(image)
-        return Image.new("RGB", (1024, 1024), color=(1, 2, 3))
-
-    def _fake_second_pass(*_args: Any, **_kwargs: Any) -> Image.Image:
-        raise AssertionError("second rembg pass should not run")
+    def _fake_generate_prompt_with_mistral(**kwargs: Any) -> str:
+        image = kwargs["image"]
+        assert isinstance(image, Image.Image)
+        assert image.mode == "RGB"
+        assert image.size == (1024, 1024)
+        assert image.getpixel((0, 0)) == (9, 9, 9)
+        vlm_images.append(image)
+        return "generated prompt"
 
     class _FakePipeline:
         def __call__(self, **kwargs: Any) -> Any:
-            assert kwargs["image"].getpixel((0, 0)) == (1, 2, 3)
+            assert kwargs["prompt"] == "generated prompt"
+            assert kwargs["image"] is vlm_images[0]
+            assert kwargs["image"].getpixel((0, 0)) == (9, 9, 9)
             return type(
                 "_Result",
                 (),
@@ -468,10 +408,6 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
     workflow._pipe = _FakePipeline()
     workflow._sdxl_pipe = _FakeSdxlPipeline()
 
-    monkeypatch.setattr(chroma_module, "remove_background_first_pass", _fake_first_pass)
-    monkeypatch.setattr(
-        chroma_module, "add_monochrome_background", _fake_add_background
-    )
     monkeypatch.setattr(
         chroma_module,
         "_write_debug_image",
@@ -485,13 +421,7 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
     monkeypatch.setattr(
         chroma_module,
         "generate_prompt_with_mistral",
-        lambda **_kwargs: "generated prompt",
-    )
-    monkeypatch.setattr(
-        chroma_module,
-        "remove_background_second_pass",
-        _fake_second_pass,
-        raising=False,
+        _fake_generate_prompt_with_mistral,
     )
 
     outputs = list(
@@ -503,15 +433,12 @@ def test_chroma_generate_skips_second_pass_and_reuses_first_cutout(
         )
     )
 
-    assert len(monochrome_input) == 1
-    assert monochrome_input[0] is first_pass_image
+    assert len(vlm_images) == 1
     assert debug_images == [
         "01_resized_input.png",
-        "02_first_pass_no_background.png",
-        "03_monochrome_init_image.png",
-        "04_chroma_generated_01.png",
-        "05_sdxl_rewrite_01.png",
-        "06_final_output_01.png",
+        "02_chroma_generated_01.png",
+        "03_sdxl_rewrite_01.png",
+        "04_final_output_01.png",
     ]
     assert len(outputs) == 1
     assert outputs[0].mode == "RGB"

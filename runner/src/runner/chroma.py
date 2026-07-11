@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-import contextlib
 from datetime import datetime
 import io
 import logging
-import multiprocessing
 from pathlib import Path
-import queue
 import random
-import re
-import sys
-import time
 from typing import Any
 
 from PIL import Image
@@ -26,15 +20,12 @@ try:
         ChromaTransformer2DModel,
     )
     from mistralai.client import Mistral
-    from rembg import new_session, remove
 except ImportError as exc:
     torch = None  # type: ignore[assignment]
     AutoPipelineForImage2Image = None  # type: ignore[assignment]
     ChromaImg2ImgPipeline = None  # type: ignore[assignment]
     ChromaTransformer2DModel = None  # type: ignore[assignment]
     Mistral = None  # type: ignore[assignment]
-    new_session = None  # type: ignore[assignment]
-    remove = None  # type: ignore[assignment]
     _CHROMA_IMPORT_ERROR: ImportError | None = exc
 else:
     _CHROMA_IMPORT_ERROR = None
@@ -47,7 +38,6 @@ else:
 # General input handling
 IMAGE_WIDTH = 1024
 IMAGE_HEIGHT = 1024
-MONOCHROME_BACKGROUND_PATH = "monochrome_background.png"
 
 # VLM analysis
 VLM_PROMPT_INSTRUCTION_BASE = """You are a visual analysis and prompt-engineering specialist. You are shown a single, clear, frontal image of a plush toy animal. Your goal is to:
@@ -92,20 +82,6 @@ SDXL_GUIDANCE_SCALE = 5.0
 SDXL_NUM_INFERENCE_STEPS = 15
 SDXL_PROMPT = "xray"
 DEBUG_OUTPUT_DIR_NAME = "debug-output"
-FIRST_PASS_ALPHA_TIMEOUT_SECONDS = 120.0
-FIRST_PASS_WATCHDOG_POLL_SECONDS = 0.2
-FIRST_PASS_SUBPROCESS_START_METHOD = "spawn"
-INCOMPLETE_CHOLESKY_WARNING_PATTERN = re.compile(
-    r"(?ms)PERFORMANCE WARNING:\s*"
-    r"Thresholded incomplete Cholesky decomposition failed due to insufficient positive-definiteness of matrix A with parameters:\s*"
-    r"discard_threshold\s*=\s*[0-9.eE+-]+\s*"
-    r"shift\s*=\s*[0-9.eE+-]+\s*"
-    r"Try decreasing discard_threshold or start with a larger shift\s*"
-)
-INCOMPLETE_CHOLESKY_WARNING_TOKEN = (
-    "thresholded incomplete cholesky decomposition failed due to insufficient "
-    "positive-definiteness of matrix a"
-)
 
 
 def _require_chroma_dependencies() -> None:
@@ -141,278 +117,10 @@ def build_vlm_prompt_instruction(*, animal_type_hint: str) -> str:
     )
 
 
-def _strip_incomplete_cholesky_warning(message: str) -> str:
-    return INCOMPLETE_CHOLESKY_WARNING_PATTERN.sub("", message)
-
-
-def _emit_captured_streams(stdout_text: str, stderr_text: str) -> None:
-    if stdout_text:
-        print(stdout_text, end="")
-    if stderr_text:
-        print(stderr_text, end="", file=sys.stderr)
-
-
-class _QueueTextStream(io.TextIOBase):
-    def __init__(self, result_queue: Any, stream_name: str) -> None:
-        self._result_queue = result_queue
-        self._stream_name = stream_name
-
-    def write(self, text: str) -> int:
-        if text:
-            self._result_queue.put(("stream", self._stream_name, text))
-        return len(text)
-
-    def flush(self) -> None:
-        return
-
-
-def _run_first_pass_remove(
-    image: Image.Image,
-    *,
-    session: Any,
-    alpha_matting: bool,
-    bgcolor: tuple[int, int, int, int] | None = None,
-) -> Image.Image | bytes:
-    _require_chroma_dependencies()
-    assert remove is not None
-
-    return remove(
-        image,
-        session=session,
-        alpha_matting=alpha_matting,
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=10,
-        alpha_matting_erode_size=10,
-        only_mask=False,
-        post_process_mask=False,
-        bgcolor=bgcolor,
-    )
-
-
-def _new_first_pass_session(*, cpu_only: bool) -> Any:
-    _require_chroma_dependencies()
-    assert new_session is not None
-    if not cpu_only:
-        return new_session(model_name="u2net")
-
-    try:
-        return new_session(
-            model_name="u2net",
-            providers=["CPUExecutionProvider"],
-        )
-    except TypeError:
-        # Older rembg builds may not expose a providers argument.
-        return new_session(model_name="u2net")
-
-
 def _serialize_image_to_png_bytes(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
-
-
-def _remove_first_pass_subprocess_worker(
-    image_bytes: bytes,
-    result_queue: Any,
-) -> None:
-    try:
-        with Image.open(io.BytesIO(image_bytes)) as source_image:
-            image = source_image.convert("RGB")
-
-        # Build a fresh CPU-only session inside the subprocess to avoid
-        # CUDA/ORT initialization issues in spawned workers.
-        active_session = _new_first_pass_session(cpu_only=True)
-
-        with contextlib.redirect_stdout(
-            _QueueTextStream(result_queue, "stdout")
-        ), contextlib.redirect_stderr(_QueueTextStream(result_queue, "stderr")):
-            output = _run_first_pass_remove(
-                image,
-                session=active_session,
-                alpha_matting=True,
-                bgcolor=None,
-            )
-
-        if isinstance(output, Image.Image):
-            payload = _serialize_image_to_png_bytes(output)
-        else:
-            payload = output
-        result_queue.put(("result", payload))
-    except Exception as exc:
-        result_queue.put(("error", repr(exc)))
-
-
-def _drain_first_pass_queue(
-    result_queue: Any,
-) -> tuple[str, str, bytes | None, str | None]:
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
-    result_payload: bytes | None = None
-    failure_message: str | None = None
-    while True:
-        try:
-            item = result_queue.get_nowait()
-        except queue.Empty:
-            break
-        if not isinstance(item, tuple) or not item:
-            continue
-
-        if item[0] == "stream" and len(item) >= 3:
-            _kind, stream_name, chunk = item
-            if stream_name == "stdout":
-                stdout_chunks.append(str(chunk))
-            elif stream_name == "stderr":
-                stderr_chunks.append(str(chunk))
-            continue
-
-        if item[0] == "result" and len(item) >= 2:
-            result_payload = item[1]
-            continue
-
-        if item[0] == "error" and len(item) >= 2:
-            failure_message = str(item[1])
-
-    return (
-        "".join(stdout_chunks),
-        "".join(stderr_chunks),
-        result_payload,
-        failure_message,
-    )
-
-
-def _start_first_pass_context() -> multiprocessing.context.BaseContext:
-    return multiprocessing.get_context(FIRST_PASS_SUBPROCESS_START_METHOD)
-
-
-def _run_first_pass_alpha_with_watchdog(
-    image: Image.Image,
-    *,
-    session: Any,
-) -> Image.Image | bytes | None:
-    del session
-    process_context = _start_first_pass_context()
-    result_queue = process_context.Queue()
-    image_bytes = _serialize_image_to_png_bytes(image)
-
-    process = process_context.Process(
-        target=_remove_first_pass_subprocess_worker,
-        args=(image_bytes, result_queue),
-        daemon=True,
-    )
-    process.start()
-
-    deadline = time.monotonic() + FIRST_PASS_ALPHA_TIMEOUT_SECONDS
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
-    warning_probe = ""
-    result_payload: bytes | None = None
-    failure_message: str | None = None
-    saw_warning = False
-
-    while time.monotonic() < deadline:
-        wait_seconds = min(
-            FIRST_PASS_WATCHDOG_POLL_SECONDS,
-            max(0.0, deadline - time.monotonic()),
-        )
-        if wait_seconds <= 0:
-            break
-
-        try:
-            item = result_queue.get(timeout=wait_seconds)
-        except queue.Empty:
-            if not process.is_alive():
-                break
-            continue
-
-        if not isinstance(item, tuple) or not item:
-            continue
-
-        if item[0] == "stream" and len(item) >= 3:
-            stream_name = str(item[1])
-            chunk = str(item[2])
-            if stream_name == "stdout":
-                stdout_chunks.append(chunk)
-            elif stream_name == "stderr":
-                stderr_chunks.append(chunk)
-
-            warning_probe = (warning_probe + chunk.lower())[-4096:]
-            if INCOMPLETE_CHOLESKY_WARNING_TOKEN in warning_probe:
-                saw_warning = True
-                break
-            continue
-
-        if item[0] == "result" and len(item) >= 2:
-            result_payload = item[1]
-            break
-
-        if item[0] == "error" and len(item) >= 2:
-            failure_message = str(item[1])
-            break
-
-    timed_out = (
-        result_payload is None
-        and failure_message is None
-        and not saw_warning
-        and time.monotonic() >= deadline
-    )
-
-    if saw_warning or timed_out:
-        if process.is_alive():
-            process.terminate()
-        process.join(timeout=2.0)
-
-        extra_stdout, extra_stderr, _extra_result, _extra_failure = (
-            _drain_first_pass_queue(result_queue)
-        )
-        stdout_text = "".join(stdout_chunks) + extra_stdout
-        stderr_text = "".join(stderr_chunks) + extra_stderr
-        _emit_captured_streams(
-            _strip_incomplete_cholesky_warning(stdout_text),
-            _strip_incomplete_cholesky_warning(stderr_text),
-        )
-
-        if saw_warning:
-            logging.warning(
-                "Detected incomplete-Cholesky warning in first-pass alpha matting; "
-                "aborting that attempt and retrying with safer fallback."
-            )
-        else:
-            logging.warning(
-                "First-pass alpha matting exceeded %.1f seconds; "
-                "retrying with safer fallback.",
-                FIRST_PASS_ALPHA_TIMEOUT_SECONDS,
-            )
-        return None
-
-    process.join(timeout=2.0)
-    extra_stdout, extra_stderr, extra_result, extra_failure = _drain_first_pass_queue(
-        result_queue
-    )
-    stdout_text = "".join(stdout_chunks) + extra_stdout
-    stderr_text = "".join(stderr_chunks) + extra_stderr
-    if result_payload is None and extra_result is not None:
-        result_payload = extra_result
-    if failure_message is None and extra_failure is not None:
-        failure_message = extra_failure
-
-    if failure_message is not None:
-        _emit_captured_streams(stdout_text, stderr_text)
-        logging.warning(
-            "First-pass alpha matting subprocess failed (%s); retrying with safer "
-            "fallback.",
-            failure_message,
-        )
-        return None
-
-    _emit_captured_streams(stdout_text, stderr_text)
-    if result_payload is None:
-        logging.warning(
-            "First-pass alpha matting finished without output; retrying with safer "
-            "fallback."
-        )
-        return None
-
-    return result_payload
 
 
 def _candidate_asset_dirs() -> list[Path]:
@@ -500,35 +208,6 @@ def pick_device_dtype(device_arg: str, dtype_arg: str) -> tuple[str, Any]:
         else:
             dtype = torch.float32
     return device, dtype
-
-
-def remove_background_first_pass(image: Image.Image, session: Any) -> Image.Image:
-    output = _run_first_pass_alpha_with_watchdog(image, session=session)
-    if output is None:
-        output = _run_first_pass_remove(
-            image,
-            session=session,
-            alpha_matting=False,
-            bgcolor=None,
-        )
-
-    if isinstance(output, Image.Image):
-        return output.convert("RGBA")
-    return Image.open(io.BytesIO(output)).convert("RGBA")
-
-
-def add_monochrome_background(image: Image.Image) -> Image.Image:
-    background_path = _resolve_workflow_file(
-        MONOCHROME_BACKGROUND_PATH,
-        description="monochrome background",
-    )
-    background = Image.open(background_path).convert("RGB")
-    if background.size != image.size:
-        background = background.resize(image.size, Image.Resampling.NEAREST)
-    return Image.alpha_composite(
-        background.convert("RGBA"),
-        image.convert("RGBA"),
-    ).convert("RGB")
 
 
 def load_pipeline(dtype: Any) -> Any:
@@ -715,7 +394,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._device: str | None = None
         self._dtype: Any = None
         self._torch: Any = None
-        self._first_pass_session: Any = None
         self._pipe: Any = None
         self._sdxl_pipe: Any = None
 
@@ -727,7 +405,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
     def setup(self) -> None:
         _require_chroma_dependencies()
         assert torch is not None
-        assert new_session is not None
         if not self.mistral_api_key.strip():
             raise RuntimeError("Chroma workflow requires --mistral-api-key to be set.")
 
@@ -741,7 +418,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._torch = torch
         self._device = device
         self._dtype = dtype
-        self._first_pass_session = new_session(model_name="u2net")
         self._pipe = load_pipeline(dtype=dtype)
         self._pipe.to(device)
         self._sdxl_pipe = load_sdxl_style_pipeline(dtype=dtype, device=device)
@@ -752,7 +428,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             or self._device is None
             or self._pipe is None
             or self._sdxl_pipe is None
-            or self._first_pass_session is None
         ):
             raise RuntimeError(
                 "Chroma workflow is not initialized. setup() must be called first."
@@ -776,7 +451,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         self._assert_ready()
         assert self._pipe is not None
         assert self._sdxl_pipe is not None
-        assert self._first_pass_session is not None
         workflow_parameters = parameters or {}
         animal_type_hint = _normalize_animal_type_hint(
             workflow_parameters.get("animal_type")
@@ -792,15 +466,6 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             Image.Resampling.NEAREST,
         )
         _write_debug_image(debug_dir, "01_resized_input.png", resized_input)
-        first_rembg_image = remove_background_first_pass(
-            resized_input,
-            session=self._first_pass_session,
-        )
-        _write_debug_image(
-            debug_dir,
-            "02_first_pass_no_background.png",
-            first_rembg_image,
-        )
 
         key_state = "provided" if self.mistral_api_key.strip() else "omitted"
         logging.info(
@@ -813,7 +478,7 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         )
 
         final_prompt = generate_prompt_with_mistral(
-            image=first_rembg_image,
+            image=resized_input,
             instruction=prompt_instruction,
             api_key=self.mistral_api_key,
             model=VLM_MODEL_NAME,
@@ -824,8 +489,7 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
         logging.debug("VLM generated prompt: %s", final_prompt)
         _write_debug_prompt(debug_dir, final_prompt)
 
-        init_image = add_monochrome_background(first_rembg_image)
-        _write_debug_image(debug_dir, "03_monochrome_init_image.png", init_image)
+        init_image = resized_input
         for index in range(max(num_images, 0)):
             generator = self._new_generator()
             generated = self._pipe(
@@ -841,7 +505,7 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             ).images[0]
             _write_debug_image(
                 debug_dir,
-                f"04_chroma_generated_{index + 1:02d}.png",
+                f"02_chroma_generated_{index + 1:02d}.png",
                 generated,
             )
 
@@ -855,13 +519,13 @@ class ChromaWorkflow(WorkflowBase, name="chroma"):
             ).images[0]
             _write_debug_image(
                 debug_dir,
-                f"05_sdxl_rewrite_{index + 1:02d}.png",
+                f"03_sdxl_rewrite_{index + 1:02d}.png",
                 sdxl_result,
             )
             final_image = sdxl_result.convert("L").convert("RGB")
             _write_debug_image(
                 debug_dir,
-                f"06_final_output_{index + 1:02d}.png",
+                f"04_final_output_{index + 1:02d}.png",
                 final_image,
             )
             yield final_image
