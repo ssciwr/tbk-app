@@ -1,6 +1,5 @@
 diffusers
 mistralai
 peft
-rembg[gpu]
 torch
 transformers
