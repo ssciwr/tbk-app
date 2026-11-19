@@ -21,6 +21,7 @@ class CaseMetadata:
     child_name: str
     animal_name: str
     animal_type: str = ""
+    anamnesis: str = ""
 
 
 @dataclass(slots=True)

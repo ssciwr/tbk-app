@@ -14,6 +14,7 @@
       child_name: string;
       animal_name: string;
       animal_type?: string;
+      anamnesis?: string;
       broken_bone: boolean;
     };
     original_url: string;
@@ -225,6 +226,12 @@
                 {#if isQrOnlyCase(pending.metadata)}
                   <p class="meta-line">Mode: QR-only fast-track</p>
                 {/if}
+                {#if hasText(pending.metadata.anamnesis)}
+                  <div class="anamnesis-note">
+                    <strong>Anamnesis</strong>
+                    <p>{pending.metadata.anamnesis}</p>
+                  </div>
+                {/if}
                 {#if !pending.ready_for_review}
                   <p class="generation-note">
                     Image currently generating ({pending.received_results}/{pending.results_per_image})
@@ -344,6 +351,22 @@
     margin: 0.2rem 0 0;
     color: #5e646c;
     font-size: 0.95rem;
+  }
+
+  .anamnesis-note {
+    margin-top: 0.2rem;
+    padding: 0.65rem;
+    border-left: 4px solid var(--accent-2);
+    border-radius: 6px;
+    background: #fff7eb;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .anamnesis-note p {
+    margin: 0.25rem 0 0;
+    font-size: 1rem;
+    line-height: 1.35;
   }
 
   .meta-actions {

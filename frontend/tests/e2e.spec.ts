@@ -136,6 +136,7 @@ test('results page supports confirm decision', async ({ page }) => {
                 metadata: {
                   child_name: 'Ada',
                   animal_name: 'Teddy',
+                  anamnesis: 'Teddy says the left arm hurts.',
                   broken_bone: false
                 },
                 original_url: TINY_PNG,
@@ -158,6 +159,7 @@ test('results page supports confirm decision', async ({ page }) => {
 
   await page.goto('/review');
   await expect(page.getByText('Case #1')).toBeVisible();
+  await expect(page.getByText('Teddy says the left arm hurts.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Accept' }).first().click();
   await expect(page).toHaveURL(/\/fracture$/);
@@ -191,7 +193,8 @@ test('fracture page supports gummy pack placement, apply, and discard', async ({
             metadata: {
               child_name: 'Ada',
               animal_name: 'Teddy',
-              animal_type: 'bear'
+              animal_type: 'bear',
+              anamnesis: 'Teddy says the left arm hurts.'
             },
             selected_url: LARGE_EDITOR_IMAGE
           }
@@ -202,6 +205,7 @@ test('fracture page supports gummy pack placement, apply, and discard', async ({
 
   await page.goto('/fracture');
   await expect(page.getByText('Case #12')).toBeVisible();
+  await expect(page.getByText('Teddy says the left arm hurts.')).toBeVisible();
 
   const editorCanvas = page.locator('.editor-canvas');
   const initialCanvasBox = await editorCanvas.boundingBox();
