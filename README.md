@@ -30,4 +30,4 @@ The web app, as well as the runner are provided under the terms of the MIT licen
 Licenses of the used models:
 * [SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0): CreativeML Open RAIL-M License
 * [Chroma](https://huggingface.co/lodestones/Chroma/tree/main): Apache 2.0 License
-* [X-Ray XL LoRA](civitai.com/models/231655/xray-xl-lora): See civit.ai for exact terms
+* [X-Ray XL LoRA](https://civitai.com/models/231655/xray-xl-lora): See civit.ai for exact terms
