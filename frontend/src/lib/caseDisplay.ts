@@ -21,6 +21,20 @@ export function formatCaseSubject(
   return childName || animalName || fallback;
 }
 
+export function formatCaseNavigatorLabel(
+  metadata: CaseDisplayMetadata,
+  fallback = 'QR-only case'
+): string {
+  const childName = metadata.child_name?.trim() ?? '';
+  const animalName = metadata.animal_name?.trim() ?? '';
+
+  if (childName && animalName) {
+    return `${animalName} von ${childName}`;
+  }
+
+  return formatCaseSubject(metadata, fallback);
+}
+
 export function isQrOnlyCase(metadata: CaseDisplayMetadata): boolean {
   return !hasText(metadata.child_name) && !hasText(metadata.animal_name);
 }

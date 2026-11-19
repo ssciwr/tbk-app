@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
+  import CaseNavigator from '$lib/components/CaseNavigator.svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
   import { hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
@@ -28,6 +29,8 @@
   type ReviewAction = 'confirm' | 'retry' | 'cancel';
 
   let cases: PendingCase[] = [];
+  let selectedCase: PendingCase | undefined;
+  let selectedCaseId: number | null = null;
   let loading = true;
   let error = '';
   let actionMessage = '';
@@ -35,6 +38,8 @@
   let pollHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
   let animalTypeDrafts: Record<number, string> = {};
+
+  $: selectedCase = cases.find((pending) => pending.case_id === selectedCaseId);
 
   function revokeObjectUrls(urls: string[]): void {
     for (const url of urls) {
@@ -193,7 +198,7 @@
   });
 </script>
 
-<div class="card">
+<div class="card stage-intro">
   <h1>Review Results</h1>
   <p>Accept one generated X-Ray, reject all and retry, or cancel the case.</p>
 
@@ -208,103 +213,129 @@
     <p>Loading pending cases...</p>
   {:else if cases.length === 0}
     <p>No cases awaiting review.</p>
-  {:else}
-    <div class="grid">
-      {#each cases as pending}
-        <article class="card result-case">
-          <div class="case-layout">
-            <div class="case-top-row">
-              <section class="meta-panel">
-                <h2>Case #{pending.case_id}</h2>
-                {#if hasText(pending.metadata.child_name)}
-                  <p class="meta-line">Child: {pending.metadata.child_name}</p>
-                {/if}
-                {#if hasText(pending.metadata.animal_name)}
-                  <p class="meta-line">Animal: {pending.metadata.animal_name}</p>
-                {/if}
-                {#if isQrOnlyCase(pending.metadata)}
-                  <p class="meta-line">Mode: QR-only fast-track</p>
-                {/if}
-                {#if !pending.ready_for_review}
-                  <p class="generation-note">
-                    Image currently generating ({pending.received_results}/{pending.results_per_image})
-                  </p>
-                {/if}
-                <div class="meta-actions">
-                  <label class="animal-hint-field">
-                    <span>Animal type hint:</span>
-                    <input
-                      type="text"
-                      value={animalTypeDrafts[pending.case_id] ?? pending.metadata.animal_type ?? ''}
-                      placeholder="e.g. fox, bunny, otter"
-                      aria-label={`Animal hint for case ${pending.case_id}`}
-                      on:input={(event) =>
-                        updateAnimalTypeDraft(pending.case_id, (event.currentTarget as HTMLInputElement).value)}
-                      disabled={decidingCaseId === pending.case_id}
-                    />
-                  </label>
-                  <div class="retry-row">
-                    <button
-                      class="secondary"
-                      on:click={() => decide(pending.case_id, 'retry', null)}
-                      disabled={decidingCaseId === pending.case_id}
-                    >
-                      Retry generation
-                    </button>
-                  </div>
-                  <button
-                    class="warn"
-                    on:click={() => decide(pending.case_id, 'cancel', null)}
-                    disabled={decidingCaseId === pending.case_id}
-                  >
-                    Discard Case
-                  </button>
-                </div>
-              </section>
-
-              <section class="original-panel">
-                <h3>Original</h3>
-                {#if pending.original_url}
-                  <img
-                    class="preview original-image"
-                    src={pending.original_url}
-                    alt={`Original for case ${pending.case_id}`}
-                  />
-                {:else}
-                  <div class="preview-frame">Original image unavailable</div>
-                {/if}
-              </section>
-            </div>
-
-            <section class="candidates-panel">
-              <h3>Candidates</h3>
-              <div class="candidate-grid">
-                {#each resultSlots(pending) as resultUrl, index}
-                  <article class="candidate-card">
-                    {#if resultUrl}
-                      <img class="preview candidate-image" src={resultUrl} alt={`Result ${index} for case ${pending.case_id}`} />
-                      <button
-                        class="ok"
-                        on:click={() => decide(pending.case_id, 'confirm', index)}
-                        disabled={decidingCaseId === pending.case_id}
-                      >
-                        Accept
-                      </button>
-                    {:else}
-                      <div class="preview-frame">Image currently generating</div>
-                    {/if}
-                  </article>
-                {/each}
-              </div>
-            </section>
-          </div>
-        </article>
-      {/each}
-    </div>
   {/if}
 </div>
 
+{#if !loading && cases.length > 0}
+  <div class="case-workspace">
+    <CaseNavigator
+      items={cases}
+      bind:selectedCaseId
+      itemLabel="cases"
+      ariaLabel="Cases awaiting review"
+    />
+
+    {#if selectedCase}
+      <article class="card result-case">
+        <div class="case-layout">
+          <div class="case-top-row">
+            <section class="meta-panel">
+              <h2>Case #{selectedCase.case_id}</h2>
+              {#if hasText(selectedCase.metadata.child_name)}
+                <p class="meta-line">Child: {selectedCase.metadata.child_name}</p>
+              {/if}
+              {#if hasText(selectedCase.metadata.animal_name)}
+                <p class="meta-line">Animal: {selectedCase.metadata.animal_name}</p>
+              {/if}
+              {#if isQrOnlyCase(selectedCase.metadata)}
+                <p class="meta-line">Mode: QR-only fast-track</p>
+              {/if}
+              {#if !selectedCase.ready_for_review}
+                <p class="generation-note">
+                  Image currently generating ({selectedCase.received_results}/{selectedCase.results_per_image})
+                </p>
+              {/if}
+              <div class="meta-actions">
+                <label class="animal-hint-field">
+                  <span>Animal type hint:</span>
+                  <input
+                    type="text"
+                    value={animalTypeDrafts[selectedCase.case_id] ?? selectedCase.metadata.animal_type ?? ''}
+                    placeholder="e.g. fox, bunny, otter"
+                    aria-label={`Animal hint for case ${selectedCase.case_id}`}
+                    on:input={(event) =>
+                      updateAnimalTypeDraft(selectedCase.case_id, (event.currentTarget as HTMLInputElement).value)}
+                    disabled={decidingCaseId === selectedCase.case_id}
+                  />
+                </label>
+                <div class="retry-row">
+                  <button
+                    class="secondary"
+                    on:click={() => decide(selectedCase.case_id, 'retry', null)}
+                    disabled={decidingCaseId === selectedCase.case_id}
+                  >
+                    Retry generation
+                  </button>
+                </div>
+                <button
+                  class="warn"
+                  on:click={() => decide(selectedCase.case_id, 'cancel', null)}
+                  disabled={decidingCaseId === selectedCase.case_id}
+                >
+                  Discard Case
+                </button>
+              </div>
+            </section>
+
+            <section class="original-panel">
+              <h3>Original</h3>
+              {#if selectedCase.original_url}
+                <img
+                  class="preview original-image"
+                  src={selectedCase.original_url}
+                  alt={`Original for case ${selectedCase.case_id}`}
+                />
+              {:else}
+                <div class="preview-frame">Original image unavailable</div>
+              {/if}
+            </section>
+          </div>
+
+          <section class="candidates-panel">
+            <h3>Candidates</h3>
+            <div class="candidate-grid">
+              {#each resultSlots(selectedCase) as resultUrl, index}
+                <article class="candidate-card">
+                  {#if resultUrl}
+                    <img class="preview candidate-image" src={resultUrl} alt={`Result ${index} for case ${selectedCase.case_id}`} />
+                    <button
+                      class="ok"
+                      on:click={() => decide(selectedCase.case_id, 'confirm', index)}
+                      disabled={decidingCaseId === selectedCase.case_id}
+                    >
+                      Accept
+                    </button>
+                  {:else}
+                    <div class="preview-frame">Image currently generating</div>
+                  {/if}
+                </article>
+              {/each}
+            </div>
+          </section>
+        </div>
+      </article>
+    {:else}
+      <section class="card"><p>Select a case from the list.</p></section>
+    {/if}
+  </div>
+{/if}
+
 <style>
+  .stage-intro {
+    margin-bottom: 1rem;
+  }
+
+  .stage-intro h1 {
+    margin-top: 0;
+  }
+
+  .case-workspace {
+    display: grid;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+  }
+
   .result-case {
     background: #fff;
   }
@@ -461,6 +492,12 @@
     .original-image,
     .preview-frame {
       width: 100%;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .case-workspace {
+      grid-template-columns: 1fr;
     }
   }
 </style>

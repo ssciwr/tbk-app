@@ -163,6 +163,62 @@ test('results page supports confirm decision', async ({ page }) => {
   await expect(page).toHaveURL(/\/fracture$/);
 });
 
+test('review page selects and searches pending cases by child or animal name', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  await page.route('**/api/review/pending', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        cases: [
+          {
+            case_id: 21,
+            status: 'awaiting_review',
+            received_results: 1,
+            ready_for_review: true,
+            metadata: { child_name: 'Noah', animal_name: 'Otter', broken_bone: false },
+            original_url: TINY_PNG,
+            result_urls: [TINY_PNG],
+            results_per_image: 1
+          },
+          {
+            case_id: 22,
+            status: 'awaiting_review',
+            received_results: 1,
+            ready_for_review: true,
+            metadata: { child_name: 'Ada', animal_name: 'Bunny', broken_bone: false },
+            original_url: TINY_PNG,
+            result_urls: [TINY_PNG],
+            results_per_image: 1
+          }
+        ]
+      })
+    });
+  });
+
+  await page.goto('/review');
+
+  await expect(page.getByRole('button', { name: 'Otter von Noah' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('Case #21')).toBeVisible();
+  await expect(page.getByText('Case #22')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Bunny von Ada' }).click();
+  await expect(page.getByText('Case #22')).toBeVisible();
+  await expect(page.getByText('Case #21')).toHaveCount(0);
+
+  await page.getByLabel('Search cases').fill('ott');
+  await expect(page.getByRole('button', { name: 'Otter von Noah' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bunny von Ada' })).toHaveCount(0);
+  await expect(page.getByText('Case #21')).toBeVisible();
+});
+
 test('fracture page supports gummy pack placement, apply, and discard', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
@@ -269,6 +325,62 @@ test('fracture page supports gummy pack placement, apply, and discard', async ({
   await expect(page.getByLabel('Gummy pack opacity')).toHaveCount(0);
 });
 
+test('fracture page selects and searches pending cases without discarding editors', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  await page.route('**/api/config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ fracture_editor_enabled: true })
+    });
+  });
+
+  await page.route('**/api/fracture/pending', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        cases: [
+          {
+            case_id: 31,
+            metadata: { child_name: 'Noah', animal_name: 'Otter', animal_type: 'otter' },
+            selected_url: LARGE_EDITOR_IMAGE
+          },
+          {
+            case_id: 32,
+            metadata: { child_name: 'Ada', animal_name: 'Bunny', animal_type: 'rabbit' },
+            selected_url: LARGE_EDITOR_IMAGE
+          }
+        ]
+      })
+    });
+  });
+
+  await page.goto('/fracture');
+
+  const otterEditor = page.locator('article.fracture-card').filter({ hasText: 'Case #31' });
+  const bunnyEditor = page.locator('article.fracture-card').filter({ hasText: 'Case #32' });
+  await expect(otterEditor).toBeVisible();
+  await expect(bunnyEditor).toBeHidden();
+
+  await page.getByRole('button', { name: 'Bunny von Ada' }).click();
+  await expect(otterEditor).toBeHidden();
+  await expect(bunnyEditor).toBeVisible();
+
+  await page.getByLabel('Search cases').fill('noa');
+  await expect(page.getByRole('button', { name: 'Otter von Noah' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bunny von Ada' })).toHaveCount(0);
+  await expect(otterEditor).toBeVisible();
+  await expect(bunnyEditor).toBeHidden();
+});
+
 test('review page sends edited animal hint with retry', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
@@ -372,6 +484,73 @@ test('results page resolves relative protected image URLs in same-origin mode', 
   await expect.poll(() => originalFetches).toBe(1);
   await expect.poll(() => xrayFetches).toBe(1);
   await expect(page.getByRole('img', { name: 'Case X-Ray' })).toBeVisible();
+});
+
+test('results page lists retained cases, selects a result, and filters by name substring', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('teddy_hospital_jwt', 'token-abc');
+  });
+
+  await page.route('**/api/auth/verify', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true }) });
+  });
+
+  await page.route('**/api/carousel', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [
+          {
+            case_id: 4,
+            metadata: {
+              child_name: 'Noah',
+              animal_name: 'Otter',
+              qr_content: 'qr-4',
+              broken_bone: false
+            },
+            original_url: TINY_PNG,
+            xray_url: TINY_PNG,
+            approved_at: '2026-04-09T10:05:00Z'
+          },
+          {
+            case_id: 3,
+            metadata: {
+              child_name: 'Ada',
+              animal_name: 'Bunny',
+              qr_content: 'qr-3',
+              broken_bone: false
+            },
+            original_url: TINY_PNG,
+            xray_url: TINY_PNG,
+            approved_at: '2026-04-09T10:00:00Z'
+          }
+        ],
+        max_items: 10,
+        autoplay_interval_seconds: 10
+      })
+    });
+  });
+
+  await page.goto('/results');
+
+  await expect(page.getByRole('button', { name: 'Otter von Noah' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Bunny von Ada' })).toBeVisible();
+  await expect(page.getByText('2 of 2 results')).toBeVisible();
+  await expect(page.getByText('(up to 10 retained)')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Bunny von Ada' }).click();
+  await expect(page.getByText('Case: #3')).toBeVisible();
+
+  await page.getByLabel('Search results').fill('ott');
+  await expect(page.getByRole('button', { name: 'Otter von Noah' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Bunny von Ada' })).toHaveCount(0);
+  await expect(page.getByText('1 of 2 results')).toBeVisible();
+  await expect(page.getByText('Case: #4')).toBeVisible();
+
+  await page.getByLabel('Search results').fill('no match');
+  await expect(page.getByText('No matching results.')).toBeVisible();
+  await expect(page.getByText('Select a result from the list.')).toBeVisible();
 });
 
 test('admin QR page ignores stale status responses from an older job', async ({ page }) => {
