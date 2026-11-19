@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import CaseNavigator from '$lib/components/CaseNavigator.svelte';
   import { authedFetch, authedFetchUrl } from '$lib/api';
-  import { hasText, isQrOnlyCase } from '$lib/caseDisplay';
+  import { formatCaseNavigatorLabel, hasText, isQrOnlyCase } from '$lib/caseDisplay';
   import { requireAuthRedirect } from '$lib/auth';
 
   type ApiCarouselItem = {
@@ -30,7 +31,9 @@
   };
 
   let items: CarouselItem[] = [];
-  let index = 0;
+  let visibleCaseIds: number[] = [];
+  let selectedItem: CarouselItem | undefined;
+  let selectedCaseId: number | null = null;
   let showOriginal = false;
   let maxItems = 10;
   let refreshMs = 5000;
@@ -38,6 +41,8 @@
   let status = '';
   let refreshHandle: ReturnType<typeof setInterval> | null = null;
   let activeObjectUrls: string[] = [];
+
+  $: selectedItem = items.find((item) => item.case_id === selectedCaseId);
 
   function revokeObjectUrls(urls: string[]): void {
     for (const url of urls) {
@@ -100,25 +105,28 @@
     items = hydratedItems;
     status = '';
 
-    if (index >= items.length) {
-      index = Math.max(0, items.length - 1);
+    if (!items.some((item) => item.case_id === selectedCaseId)) {
+      selectedCaseId = items[0]?.case_id ?? null;
     }
 
     restartRefresh();
   }
 
   function next(): void {
-    if (items.length === 0) {
+    if (visibleCaseIds.length === 0) {
       return;
     }
-    index = (index + 1) % items.length;
+    const currentIndex = visibleCaseIds.indexOf(selectedCaseId ?? -1);
+    selectedCaseId = visibleCaseIds[(currentIndex + 1) % visibleCaseIds.length];
   }
 
   function prev(): void {
-    if (items.length === 0) {
+    if (visibleCaseIds.length === 0) {
       return;
     }
-    index = (index - 1 + items.length) % items.length;
+    const currentIndex = visibleCaseIds.indexOf(selectedCaseId ?? -1);
+    const previousIndex = currentIndex <= 0 ? visibleCaseIds.length - 1 : currentIndex - 1;
+    selectedCaseId = visibleCaseIds[previousIndex];
   }
 
   onMount(async () => {
@@ -139,87 +147,126 @@
   });
 </script>
 
-<div class="card">
-  <div style="display:flex; gap:0.6rem; flex-wrap:wrap; margin-bottom:0.8rem;">
-    <button on:click={prev} disabled={items.length === 0}>Prev</button>
-    <button on:click={next} disabled={items.length === 0}>Next</button>
-  </div>
+<div class="results-layout">
+  <CaseNavigator
+    {items}
+    bind:selectedCaseId
+    bind:visibleCaseIds
+    {maxItems}
+    itemLabel="results"
+    ariaLabel="Approved results"
+    emptyMessage="No approved images yet."
+  />
 
-  <label style="display:flex; align-items:center; gap:0.5rem; margin-top:0.6rem;">
-    <input type="checkbox" bind:checked={showOriginal} style="width:auto;" />
-    Also show original image
-  </label>
+  <section class="card result-detail" aria-live="polite">
+    {#if selectedItem}
+      <div class="detail-toolbar">
+        <div class="result-navigation">
+          <button on:click={prev} disabled={visibleCaseIds.length < 2}>Prev</button>
+          <button on:click={next} disabled={visibleCaseIds.length < 2}>Next</button>
+        </div>
 
-  {#if items.length === 0}
-    <p>No approved images yet.</p>
-  {:else}
-    <p>
-      Showing {index + 1} / {items.length}
-      | Approved at {new Date(items[index].approved_at).toLocaleString()}
-    </p>
-
-    <div class="meta-grid">
-      <p><strong>Case:</strong> #{items[index].case_id}</p>
-      {#if hasText(items[index].metadata.child_name)}
-        <p><strong>Child:</strong> {items[index].metadata.child_name}</p>
-      {/if}
-      {#if hasText(items[index].metadata.animal_name)}
-        <p><strong>Animal:</strong> {items[index].metadata.animal_name}</p>
-      {/if}
-      {#if isQrOnlyCase(items[index].metadata)}
-        <p><strong>Mode:</strong> QR-only fast-track</p>
-      {/if}
-      <p><strong>QR:</strong> {items[index].metadata.qr_content}</p>
-    </div>
-
-    {#if showOriginal}
-      <div class="image-row">
-        <article class="image-panel">
-          <h3>Original</h3>
-          {#if items[index].original_src}
-            <img
-              class="preview"
-              src={items[index].original_src}
-              alt="Case original"
-              style="width:100%;"
-            />
-          {:else}
-            <div class="preview unavailable">Original image unavailable</div>
-          {/if}
-        </article>
-
-        <article class="image-panel">
-          <h3>X-Ray</h3>
-          {#if items[index].xray_src}
-            <img
-              class="preview"
-              src={items[index].xray_src}
-              alt="Case X-Ray"
-              style="width:100%;"
-            />
-          {:else}
-            <div class="preview unavailable">X-Ray unavailable</div>
-          {/if}
-        </article>
+        <label class="original-toggle">
+          <input type="checkbox" bind:checked={showOriginal} />
+          Also show original image
+        </label>
       </div>
-    {:else if items[index].xray_src}
-      <img
-        class="preview"
-        src={items[index].xray_src}
-        alt="Case X-Ray"
-        style="width:min(100%, 900px);"
-      />
-    {:else}
-      <div class="preview unavailable" style="width:min(100%, 900px);">X-Ray unavailable</div>
-    {/if}
-  {/if}
 
-  {#if status}
-    <p style="color:#b23a48;">{status}</p>
-  {/if}
+      <h2>{formatCaseNavigatorLabel(selectedItem.metadata)}</h2>
+      <p class="approval-time">Approved at {new Date(selectedItem.approved_at).toLocaleString()}</p>
+
+      <div class="meta-grid">
+        <p><strong>Case:</strong> #{selectedItem.case_id}</p>
+        {#if hasText(selectedItem.metadata.child_name)}
+          <p><strong>Child:</strong> {selectedItem.metadata.child_name}</p>
+        {/if}
+        {#if hasText(selectedItem.metadata.animal_name)}
+          <p><strong>Animal:</strong> {selectedItem.metadata.animal_name}</p>
+        {/if}
+        {#if isQrOnlyCase(selectedItem.metadata)}
+          <p><strong>Mode:</strong> QR-only fast-track</p>
+        {/if}
+        <p><strong>QR:</strong> {selectedItem.metadata.qr_content}</p>
+      </div>
+
+      {#if showOriginal}
+        <div class="image-row">
+          <article class="image-panel">
+            <h3>Original</h3>
+            {#if selectedItem.original_src}
+              <img class="preview" src={selectedItem.original_src} alt="Case original" />
+            {:else}
+              <div class="preview unavailable">Original image unavailable</div>
+            {/if}
+          </article>
+
+          <article class="image-panel">
+            <h3>X-Ray</h3>
+            {#if selectedItem.xray_src}
+              <img class="preview" src={selectedItem.xray_src} alt="Case X-Ray" />
+            {:else}
+              <div class="preview unavailable">X-Ray unavailable</div>
+            {/if}
+          </article>
+        </div>
+      {:else if selectedItem.xray_src}
+        <img class="preview result-image" src={selectedItem.xray_src} alt="Case X-Ray" />
+      {:else}
+        <div class="preview unavailable result-image">X-Ray unavailable</div>
+      {/if}
+    {:else if items.length > 0}
+      <p>Select a result from the list.</p>
+    {:else}
+      <p>No approved image selected.</p>
+    {/if}
+
+    {#if status}
+      <p class="error-message">{status}</p>
+    {/if}
+  </section>
 </div>
 
 <style>
+  .results-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .detail-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .result-navigation {
+    display: flex;
+    gap: 0.6rem;
+  }
+
+  .original-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+  }
+
+  .original-toggle input {
+    width: auto;
+  }
+
+  .result-detail h2 {
+    margin: 1rem 0 0.15rem;
+  }
+
+  .approval-time {
+    margin: 0 0 0.8rem;
+    color: #4f5a60;
+  }
+
   .meta-grid {
     display: grid;
     gap: 0.25rem;
@@ -241,6 +288,14 @@
     margin: 0 0 0.4rem;
   }
 
+  .image-panel .preview {
+    width: 100%;
+  }
+
+  .result-image {
+    width: min(100%, 900px);
+  }
+
   .unavailable {
     display: grid;
     place-items: center;
@@ -249,5 +304,16 @@
     background: #f6f6f6;
     border: 1px solid var(--border);
     border-radius: 10px;
+  }
+
+  .error-message {
+    color: #b23a48;
+  }
+
+  @media (max-width: 760px) {
+    .results-layout {
+      grid-template-columns: 1fr;
+    }
+
   }
 </style>

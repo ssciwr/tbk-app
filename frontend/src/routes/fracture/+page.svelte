@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { onDestroy, onMount } from 'svelte';
+  import CaseNavigator from '$lib/components/CaseNavigator.svelte';
   import FractureEditorInline from '$lib/components/FractureEditorInline.svelte';
   import { authedFetch, authedFetchUrl, loadAppConfig } from '$lib/api';
   import { formatCaseSubject, hasText, isQrOnlyCase } from '$lib/caseDisplay';
@@ -27,6 +28,7 @@
   };
 
   let cases: PendingFractureCase[] = [];
+  let selectedCaseId: number | null = null;
   let loading = true;
   let error = '';
   let actionMessage = '';
@@ -143,9 +145,9 @@
   });
 </script>
 
-<div class="card">
+<div class="card stage-intro">
   <h1>Bone Breaking Stage</h1>
-  <p>Use the fracture editor directly below each selected image, then finalize the case.</p>
+  <p>Select a case, use the fracture editor, then finalize the result.</p>
 
   {#if actionMessage}
     <p>{actionMessage}</p>
@@ -158,10 +160,21 @@
     <p>Loading pending cases...</p>
   {:else if cases.length === 0}
     <p>No cases waiting for bone breaking.</p>
-  {:else}
-    <div class="fracture-grid">
-      {#each cases as pending}
-        <article class="card fracture-card">
+  {/if}
+</div>
+
+{#if !loading && cases.length > 0}
+  <div class="case-workspace">
+    <CaseNavigator
+      items={cases}
+      bind:selectedCaseId
+      itemLabel="cases"
+      ariaLabel="Cases waiting for bone breaking"
+    />
+
+    <div class="fracture-detail">
+      {#each cases as pending (pending.case_id)}
+        <article class="card fracture-card" hidden={pending.case_id !== selectedCaseId}>
           <h2>Case #{pending.case_id}</h2>
           {#if hasText(pending.metadata.child_name)}
             <p><strong>Child:</strong> {pending.metadata.child_name}</p>
@@ -181,15 +194,32 @@
           />
         </article>
       {/each}
+
+      {#if selectedCaseId === null}
+        <section class="card"><p>Select a case from the list.</p></section>
+      {/if}
     </div>
-  {/if}
-</div>
+  </div>
+{/if}
 
 <style>
-  .fracture-grid {
+  .stage-intro {
+    margin-bottom: 1rem;
+  }
+
+  .stage-intro h1 {
+    margin-top: 0;
+  }
+
+  .case-workspace {
     display: grid;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
     gap: 1rem;
-    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .fracture-detail {
+    min-width: 0;
   }
 
   .fracture-card {
@@ -199,8 +229,18 @@
     background: #fff;
   }
 
+  .fracture-card[hidden] {
+    display: none;
+  }
+
   .fracture-card h2,
   .fracture-card p {
     margin: 0;
+  }
+
+  @media (max-width: 760px) {
+    .case-workspace {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
