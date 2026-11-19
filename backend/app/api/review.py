@@ -36,6 +36,7 @@ async def review_pending(
                     "child_name": case.metadata.child_name,
                     "animal_name": case.metadata.animal_name,
                     "animal_type": case.metadata.animal_type,
+                    "anamnesis": case.metadata.anamnesis,
                     "broken_bone": case.broken_bone,
                 },
                 "original_url": str(

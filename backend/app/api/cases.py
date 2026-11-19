@@ -20,6 +20,7 @@ async def create_case(
     child_name: Annotated[str | None, Form()] = None,
     animal_name: Annotated[str | None, Form()] = None,
     animal_type: Annotated[str | None, Form()] = None,
+    anamnesis: Annotated[str | None, Form()] = None,
     broken_bone: Annotated[bool, Form()] = False,
 ) -> dict[str, int | str]:
     owner_ref = qr_content.strip()
@@ -30,6 +31,7 @@ async def create_case(
         child_name=(child_name or "").strip(),
         animal_name=(animal_name or "").strip(),
         animal_type=(animal_type or "").strip(),
+        anamnesis=(anamnesis or "").strip(),
     )
 
     case = services.queue.enqueue_case(

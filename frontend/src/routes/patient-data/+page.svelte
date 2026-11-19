@@ -27,6 +27,7 @@
   let childName = '';
   let animalName = '';
   let animalType = '';
+  let anamnesis = '';
   let qrContent = '';
 
   let submitMessage = '';
@@ -465,6 +466,7 @@
       form.append('child_name', childName);
       form.append('animal_name', animalName);
       form.append('animal_type', animalType);
+      form.append('anamnesis', anamnesis);
       form.append('qr_content', qrContent);
 
       const response = await authedFetch('/api/cases', {
@@ -565,6 +567,16 @@
       </label>
 
       <label>
+        Anamnesis (optional)
+        <textarea
+          bind:value={anamnesis}
+          rows="4"
+          placeholder="e.g. The child says Teddy's left arm hurts"
+        ></textarea>
+        <span class="field-note">Only people using this system can see this note.</span>
+      </label>
+
+      <label>
         QR content
         <input
           bind:value={qrContent}
@@ -638,6 +650,21 @@
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
+  }
+
+  textarea {
+    width: 100%;
+    resize: vertical;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    padding: 0.5rem 0.6rem;
+    background: #fff;
+    font: inherit;
+  }
+
+  .field-note {
+    color: #5e646c;
+    font-size: 0.85rem;
   }
 
   .scan-status-row p {

@@ -18,6 +18,7 @@
       child_name: string;
       animal_name: string;
       animal_type?: string;
+      anamnesis?: string;
     };
     selected_url: string;
   };
@@ -172,6 +173,12 @@
           {#if isQrOnlyCase(pending.metadata)}
             <p><strong>Mode:</strong> QR-only fast-track</p>
           {/if}
+          {#if hasText(pending.metadata.anamnesis)}
+            <div class="anamnesis-note">
+              <strong>Anamnesis</strong>
+              <p>{pending.metadata.anamnesis}</p>
+            </div>
+          {/if}
           <FractureEditorInline
             caseId={pending.case_id}
             caseLabel={formatCaseSubject(pending.metadata)}
@@ -202,5 +209,19 @@
   .fracture-card h2,
   .fracture-card p {
     margin: 0;
+  }
+
+  .anamnesis-note {
+    padding: 0.65rem;
+    border-left: 4px solid var(--accent-2);
+    border-radius: 6px;
+    background: #fff7eb;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .anamnesis-note p {
+    margin-top: 0.25rem;
+    line-height: 1.35;
   }
 </style>

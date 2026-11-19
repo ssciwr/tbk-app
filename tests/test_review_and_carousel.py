@@ -22,6 +22,7 @@ async def _create_case_ready_for_review(
     auth_headers: dict[str, str],
     png_bytes: bytes,
     qr_content: str = "1",
+    anamnesis: str = "",
 ) -> int:
     created = await client.post(
         "/api/cases",
@@ -29,6 +30,7 @@ async def _create_case_ready_for_review(
         data={
             "child_name": "Max",
             "animal_name": "Bunny",
+            "anamnesis": anamnesis,
             "qr_content": qr_content,
             "broken_bone": "true",
         },
@@ -67,12 +69,21 @@ async def test_review_confirm_transition(
     png_bytes: bytes,
     settings,
 ) -> None:
-    case_id = await _create_case_ready_for_review(client, auth_headers, png_bytes)
+    case_id = await _create_case_ready_for_review(
+        client,
+        auth_headers,
+        png_bytes,
+        anamnesis="  The bunny says its left paw hurts.  ",
+    )
 
     pending = await client.get("/api/review/pending", headers=auth_headers)
     assert pending.status_code == 200
     pending_cases = pending.json()["cases"]
     assert pending_cases and pending_cases[0]["case_id"] == case_id
+    assert (
+        pending_cases[0]["metadata"]["anamnesis"]
+        == "The bunny says its left paw hurts."
+    )
 
     decision = await client.post(
         f"/api/review/{case_id}/decision",
@@ -85,6 +96,10 @@ async def test_review_confirm_transition(
     assert pending_fracture.status_code == 200
     fracture_cases = pending_fracture.json()["cases"]
     assert fracture_cases and fracture_cases[0]["case_id"] == case_id
+    assert (
+        fracture_cases[0]["metadata"]["anamnesis"]
+        == "The bunny says its left paw hurts."
+    )
 
     carousel = await client.get("/api/carousel", headers=auth_headers)
     assert carousel.status_code == 200
@@ -105,6 +120,7 @@ async def test_review_confirm_transition(
     assert items[0]["metadata"]["child_name"] == "Max"
     assert items[0]["metadata"]["animal_name"] == "Bunny"
     assert items[0]["metadata"]["qr_content"] == "1"
+    assert "anamnesis" not in items[0]["metadata"]
 
     storage_root = Path(settings.LOCAL_STORAGE_ROOT)
     assert (storage_root / "1" / "Bunny_1_original.png").exists()

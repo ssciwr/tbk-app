@@ -33,6 +33,7 @@ async def fracture_pending(
                     "child_name": case.metadata.child_name,
                     "animal_name": case.metadata.animal_name,
                     "animal_type": case.metadata.animal_type,
+                    "anamnesis": case.metadata.anamnesis,
                 },
                 "selected_url": str(
                     request.app.url_path_for(
